@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -39,6 +41,18 @@ from PySide6.QtWidgets import (
 from .exporter import export_style
 from .exporter import _snapshot as snapshot_artist
 from .inspector import ArtistRef, iter_artist_refs
+
+
+class _AspectCanvasHost(QWidget):
+    """Centers the Matplotlib canvas while preserving the editor's figure aspect."""
+
+    def __init__(self, editor: "StyleEditor") -> None:
+        super().__init__()
+        self.editor = editor
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self.editor._update_canvas_display_size()
 
 
 def edit(fig: Figure, export_path: str | Path = "style_patch.py") -> None:
@@ -69,6 +83,8 @@ class StyleEditor(QMainWindow):
         self._committed_snapshot: dict[str, Any] | None = None
         self._dirty = False
         self._save_buttons: list[QPushButton] = []
+        self._dirty_widgets: set[QWidget] = set()
+        self._active_save_button: QPushButton | None = None
         self._position_save_button: QPushButton | None = None
         self._legend_press_xy: tuple[float, float] | None = None
         self._legend_position_dirty = False
@@ -77,13 +93,16 @@ class StyleEditor(QMainWindow):
         self.resize(1180, 760)
 
         self.canvas = FigureCanvasQTAgg(fig)
+        self.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.canvas_host = _AspectCanvasHost(self)
         self.object_list = QListWidget()
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
         self.status = QLabel("Ready")
 
         self._build_ui()
+        self._initialize_figure_design_size()
         self._connect_hover_events()
         self._configure_picking()
         self._populate_object_list()
@@ -126,7 +145,10 @@ class StyleEditor(QMainWindow):
         plot_layout = QVBoxLayout(plot_panel)
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.addWidget(self.toolbar)
-        plot_layout.addWidget(self.canvas, 1)
+        canvas_host_layout = QVBoxLayout(self.canvas_host)
+        canvas_host_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_host_layout.addWidget(self.canvas, 0, Qt.AlignCenter)
+        plot_layout.addWidget(self.canvas_host, 1)
 
         side_splitter = QSplitter(Qt.Vertical)
         side_splitter.addWidget(left_panel)
@@ -177,6 +199,7 @@ class StyleEditor(QMainWindow):
             self._set_hover_highlight(self.current_ref)
             self.status.setText(f"Selected: {self.current_ref.label}")
         self._build_form(self.current_ref)
+        self._update_canvas_display_size()
 
     def _connect_hover_events(self) -> None:
         self.canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
@@ -215,6 +238,7 @@ class StyleEditor(QMainWindow):
         self.pinned_ref = ref
         self._select_ref(ref)
         self._set_hover_highlight(ref)
+        self._update_canvas_display_size()
         if ref.kind == "legend":
             self._legend_press_xy = (float(event.x), float(event.y))
         self.status.setText(f"Pinned: {ref.label}")
@@ -248,16 +272,82 @@ class StyleEditor(QMainWindow):
             return None
 
         for ref in reversed(self.refs):
-            if ref.kind == "axes":
+            if ref.kind in {"figure", "axes", "axis"}:
                 continue
             if self._artist_contains(ref.artist, event):
                 return ref
+
+        axis_ref = self._axis_ref_at_event(event)
+        if axis_ref is not None:
+            return axis_ref
 
         if event.inaxes is not None:
             for ref in self.refs:
                 if ref.kind == "axes" and ref.artist is event.inaxes:
                     return ref
         return None
+
+    def _axis_ref_at_event(self, event: Any) -> ArtistRef | None:
+        if event.x is None or event.y is None:
+            return None
+
+        x = float(event.x)
+        y = float(event.y)
+        for ref in self.refs:
+            if ref.kind != "axis":
+                continue
+            if self._axis_artist_contains(ref, event, x, y):
+                return ref
+
+        pad = 34
+
+        for ax in self.fig.axes:
+            bbox = ax.bbox
+            inside_expanded = (
+                bbox.x0 - pad <= x <= bbox.x1 + pad
+                and bbox.y0 - pad <= y <= bbox.y1 + pad
+            )
+            if not inside_expanded:
+                continue
+
+            near_x_axis = bbox.x0 - pad <= x <= bbox.x1 + pad and (
+                abs(y - bbox.y0) <= pad or abs(y - bbox.y1) <= pad
+            )
+            near_y_axis = bbox.y0 - pad <= y <= bbox.y1 + pad and (
+                abs(x - bbox.x0) <= pad or abs(x - bbox.x1) <= pad
+            )
+            if not (near_x_axis or near_y_axis):
+                continue
+
+            target = "xaxis" if near_x_axis and not near_y_axis else "yaxis"
+            if near_x_axis and near_y_axis:
+                distance_x = min(abs(y - bbox.y0), abs(y - bbox.y1))
+                distance_y = min(abs(x - bbox.x0), abs(x - bbox.x1))
+                target = "xaxis" if distance_x <= distance_y else "yaxis"
+
+            for ref in self.refs:
+                if ref.kind == "axis" and ref.artist.axes is ax and ref.path[2] == target:
+                    return ref
+        return None
+
+    def _axis_artist_contains(self, ref: ArtistRef, event: Any, x: float, y: float) -> bool:
+        renderer = self.canvas.get_renderer()
+        for artist in self._axis_highlight_artists(ref):
+            if hasattr(artist, "get_visible") and not artist.get_visible():
+                continue
+            try:
+                contains, _details = artist.contains(event)
+                if contains:
+                    return True
+            except Exception:
+                pass
+            try:
+                bbox = artist.get_window_extent(renderer=renderer).expanded(1.4, 1.8)
+                if bbox.contains(x, y):
+                    return True
+            except Exception:
+                pass
+        return False
 
     def _artist_contains(self, artist: Any, event: Any) -> bool:
         if hasattr(artist, "get_visible") and not artist.get_visible():
@@ -320,6 +410,17 @@ class StyleEditor(QMainWindow):
                     path_effects.Normal(),
                 ]
             )
+        elif ref.kind == "axis":
+            state["axis_artists"] = []
+            for axis_artist in self._axis_highlight_artists(ref):
+                if hasattr(axis_artist, "get_path_effects") and hasattr(axis_artist, "set_path_effects"):
+                    state["axis_artists"].append((axis_artist, axis_artist.get_path_effects()))
+                    axis_artist.set_path_effects(
+                        [
+                            path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
+                            path_effects.Normal(),
+                        ]
+                    )
         elif ref.kind == "axes":
             overlay = Rectangle(
                 (0, 0),
@@ -350,14 +451,35 @@ class StyleEditor(QMainWindow):
             frame = artist.get_frame()
             frame_state = state["frame"]
             frame.set_path_effects(frame_state["path_effects"])
+        elif ref.kind == "axis" and "axis_artists" in state:
+            for axis_artist, old_effects in state["axis_artists"]:
+                axis_artist.set_path_effects(old_effects)
         elif ref.kind == "axes" and "overlay" in state:
-            state["overlay"].remove()
+            self._remove_overlay(state["overlay"])
+
+    def _axis_highlight_artists(self, ref: ArtistRef) -> list[Any]:
+        axis = ref.artist
+        artists: list[Any] = [axis.label]
+        for tick in axis.get_major_ticks():
+            artists.extend([tick.tick1line, tick.tick2line, tick.label1, tick.label2])
+        return artists
+
+    def _remove_overlay(self, overlay: Any) -> None:
+        try:
+            overlay.remove()
+        except NotImplementedError:
+            if overlay in self.fig.artists:
+                self.fig.artists.remove(overlay)
+            for ax in self.fig.axes:
+                if overlay in ax.patches:
+                    ax.patches.remove(overlay)
 
     def _build_form(self, ref: ArtistRef) -> None:
         self._building_form = True
         self._save_buttons = []
         self._position_save_button = None
         self._dirty = False
+        self._dirty_widgets = set()
         self._committed_snapshot = snapshot_artist(ref.kind, ref.path, ref.artist)
         while self.form.rowCount():
             self.form.removeRow(0)
@@ -365,7 +487,13 @@ class StyleEditor(QMainWindow):
         artist = ref.artist
         self.form.addRow(QLabel(f"{ref.kind}: {ref.label}"))
 
-        if ref.kind == "axes":
+        if ref.kind == "figure":
+            width, height = self._figure_size()
+            self._add_float("Width inches", width, lambda v: self._set_figure_size(width=v), 1.0, 30.0, 0.25)
+            self._add_float("Height inches", height, lambda v: self._set_figure_size(height=v), 1.0, 30.0, 0.25)
+            aspect = float(width / height) if height else 1.0
+            self._add_float("Aspect ratio", aspect, self._set_figure_aspect, 0.1, 10.0, 0.05, decimals=3)
+        elif ref.kind == "axes":
             self._add_text("Title", artist.get_title(), artist.set_title)
             self._add_text("X label", artist.get_xlabel(), artist.set_xlabel)
             self._add_text("Y label", artist.get_ylabel(), artist.set_ylabel)
@@ -386,6 +514,18 @@ class StyleEditor(QMainWindow):
             self._add_float("Font size", artist.get_fontsize(), artist.set_fontsize, 1.0, 96.0, 1.0)
             self._add_choice("Weight", artist.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], artist.set_fontweight)
             self._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
+        elif ref.kind == "axis":
+            axis_name = str(ref.path[2])[0]
+            ax = artist.axes
+            scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
+            self._add_choice("Scale", scale, ["linear", "log"], lambda v: self._set_axis_scale(artist, axis_name, v))
+            self._add_float("Tick start", self._axis_tick_start(artist), lambda v: self._apply_axis_ticks(artist, axis_name, v, self._axis_tick_interval(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
+            self._add_float("Tick interval", self._axis_tick_interval(artist), lambda v: self._apply_axis_ticks(artist, axis_name, self._axis_tick_start(artist), v), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
+            self._add_float("Tick label size", self._axis_tick_label_prop(artist, "fontsize", 10.0), lambda v: self._apply_axis_tick_labels(artist, fontsize=v), 1.0, 96.0, 1.0)
+            self._add_color("Tick label color", self._axis_tick_label_prop(artist, "color", "#000000"), lambda v: self._apply_axis_tick_labels(artist, color=v))
+            self._add_choice("Tick label weight", self._axis_tick_label_prop(artist, "fontweight", "normal"), ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._apply_axis_tick_labels(artist, weight=v))
+            self._add_choice("Tick label style", self._axis_tick_label_prop(artist, "fontstyle", "normal"), ["normal", "italic", "oblique"], lambda v: self._apply_axis_tick_labels(artist, style=v))
+            self._add_float("Tick label rotation", self._axis_tick_label_prop(artist, "rotation", 0.0), lambda v: self._apply_axis_tick_labels(artist, rotation=v), -180.0, 180.0, 5.0, decimals=1)
         elif ref.kind == "legend":
             artist.set_draggable(True, use_blit=False)
             frame = artist.get_frame()
@@ -413,8 +553,9 @@ class StyleEditor(QMainWindow):
 
     def _add_text(self, label: str, value: str, setter: Callable[[str], Any]) -> None:
         widget = QLineEdit(str(value))
-        widget.editingFinished.connect(lambda: self._apply(lambda: setter(widget.text())))
-        self._add_property_row(label, widget)
+        widget._mve_commit = lambda: setter(widget.text())
+        save_button = self._add_property_row(label, widget)
+        widget.editingFinished.connect(lambda: self._apply(lambda: setter(widget.text()), save_button))
 
     def _add_float(
         self,
@@ -425,23 +566,25 @@ class StyleEditor(QMainWindow):
         maximum: float,
         step: float,
         live: bool = True,
+        decimals: int = 2,
     ) -> None:
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setSingleStep(step)
-        widget.setDecimals(2)
+        widget.setDecimals(decimals)
         widget.setValue(float(value))
+        widget._mve_commit = lambda: setter(float(widget.value()))
+        save_button = self._add_property_row(label, widget)
         if live:
-            widget.valueChanged.connect(lambda new_value: self._apply(lambda: setter(float(new_value))))
+            widget.valueChanged.connect(lambda new_value: self._apply(lambda: setter(float(new_value)), save_button))
         else:
-            widget.editingFinished.connect(lambda: self._apply(lambda: setter(float(widget.value()))))
-        self._add_property_row(label, widget)
+            widget.editingFinished.connect(lambda: self._apply(lambda: setter(float(widget.value())), save_button))
 
     def _add_bool(self, label: str, value: bool, setter: Callable[[bool], Any]) -> None:
         widget = QCheckBox()
         widget.setChecked(bool(value))
-        widget.toggled.connect(lambda checked: self._apply(lambda: setter(bool(checked))))
-        self._add_property_row(label, widget)
+        save_button = self._add_property_row(label, widget)
+        widget.toggled.connect(lambda checked: self._apply(lambda: setter(bool(checked)), save_button))
 
     def _add_choice(self, label: str, value: Any, choices: list[str], setter: Callable[[str], Any]) -> None:
         widget = QComboBox()
@@ -452,20 +595,21 @@ class StyleEditor(QMainWindow):
             index = widget.findText("None")
         if index >= 0:
             widget.setCurrentIndex(index)
-        widget.currentTextChanged.connect(lambda text: self._apply(lambda: setter(text)))
-        self._add_property_row(label, widget)
+        save_button = self._add_property_row(label, widget)
+        widget.currentTextChanged.connect(lambda text: self._apply(lambda: setter(text), save_button))
 
     def _add_color(self, label: str, value: Any, setter: Callable[[str], Any]) -> None:
         button = QPushButton(str(value))
-        button.clicked.connect(lambda: self._pick_color(button, setter))
-        self._add_property_row(label, button)
+        save_button = self._add_property_row(label, button)
+        button.clicked.connect(lambda: self._pick_color(button, setter, save_button))
 
     def _add_button(self, label: str, callback: Callable[[], Any]) -> None:
         button = QPushButton(label)
-        button.clicked.connect(lambda: self._apply(callback))
         save_button = QPushButton("Save")
         save_button.setEnabled(False)
-        save_button.clicked.connect(self._save_current_changes)
+        save_button._mve_editor_widget = button
+        button.clicked.connect(lambda: self._apply(callback, save_button))
+        save_button.clicked.connect(self._save_current_changes_from_sender)
         self._save_buttons.append(save_button)
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -481,10 +625,11 @@ class StyleEditor(QMainWindow):
         self._position_save_button = button
         self.form.addRow("Position", button)
 
-    def _add_property_row(self, label: str, widget: QWidget) -> None:
+    def _add_property_row(self, label: str, widget: QWidget) -> QPushButton:
         save_button = QPushButton("Save")
         save_button.setEnabled(False)
-        save_button.clicked.connect(self._save_current_changes)
+        save_button._mve_editor_widget = widget
+        save_button.clicked.connect(self._save_current_changes_from_sender)
         self._save_buttons.append(save_button)
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -492,14 +637,15 @@ class StyleEditor(QMainWindow):
         layout.addWidget(widget, 1)
         layout.addWidget(save_button)
         self.form.addRow(label, row)
+        return save_button
 
-    def _pick_color(self, button: QPushButton, setter: Callable[[str], Any]) -> None:
+    def _pick_color(self, button: QPushButton, setter: Callable[[str], Any], save_button: QPushButton) -> None:
         color = QColorDialog.getColor(parent=self)
         if not color.isValid():
             return
         value = color.name()
         button.setText(value)
-        self._apply(lambda: setter(value))
+        self._apply(lambda: setter(value), save_button)
 
     def _rebuild_current_legend(self, **changes: Any) -> None:
         if self._rebuilding_legend:
@@ -507,6 +653,181 @@ class StyleEditor(QMainWindow):
         if self.current_ref is None or self.current_ref.kind != "legend":
             return
         self._rebuild_legend(self.current_ref.artist, **changes)
+
+    def _set_figure_size(self, width: float | None = None, height: float | None = None) -> None:
+        width_now, height_now = self._figure_size()
+        self._apply_figure_size(
+            float(width_now if width is None else width),
+            float(height_now if height is None else height),
+        )
+
+    def _set_figure_aspect(self, aspect: float) -> None:
+        _width_now, height_now = self._figure_size()
+        self._apply_figure_size(float(height_now) * float(aspect), float(height_now))
+
+    def _figure_size(self) -> tuple[float, float]:
+        if hasattr(self.fig, "_mve_width") and hasattr(self.fig, "_mve_height"):
+            return float(self.fig._mve_width), float(self.fig._mve_height)
+        width, height = self.fig.get_size_inches()
+        return float(width), float(height)
+
+    def _apply_figure_size(self, width: float, height: float) -> None:
+        self.fig._mve_width = float(width)
+        self.fig._mve_height = float(height)
+        self._update_canvas_display_size()
+
+    def _enforce_saved_figure_size(self) -> None:
+        self._update_canvas_display_size()
+
+    def _initialize_figure_design_size(self) -> None:
+        if not hasattr(self.fig, "_mve_width") or not hasattr(self.fig, "_mve_height"):
+            width, height = self.fig.get_size_inches()
+            self.fig._mve_width = float(width)
+            self.fig._mve_height = float(height)
+        self._update_canvas_display_size()
+
+    def _update_canvas_display_size(self) -> None:
+        if not hasattr(self, "canvas_host"):
+            return
+        design_width, design_height = self._figure_size()
+        if design_width <= 0 or design_height <= 0:
+            return
+        host_width = max(1, self.canvas_host.width())
+        host_height = max(1, self.canvas_host.height())
+        if host_width <= 1 or host_height <= 1:
+            return
+
+        aspect = design_width / design_height
+        target_width = host_width
+        target_height = int(round(target_width / aspect))
+        if target_height > host_height:
+            target_height = host_height
+            target_width = int(round(target_height * aspect))
+
+        target_width = max(1, target_width)
+        target_height = max(1, target_height)
+        if self.canvas.width() != target_width or self.canvas.height() != target_height:
+            self.canvas.setFixedSize(target_width, target_height)
+            self.canvas.resize(target_width, target_height)
+
+    def _set_axis_scale(self, axis: Any, axis_name: str, scale: str) -> None:
+        ax = axis.axes
+        if axis_name == "x":
+            ax.set_xscale(scale)
+        else:
+            ax.set_yscale(scale)
+        self._apply_axis_ticks(axis, axis_name, self._axis_tick_start(axis), self._axis_tick_interval(axis))
+
+    def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float) -> None:
+        interval = float(interval)
+        if interval <= 0:
+            return
+        ax = axis.axes
+        low, high = ax.get_xlim() if axis_name == "x" else ax.get_ylim()
+        inverted = high < low
+        if high < low:
+            low, high = high, low
+
+        ticks: list[float] = []
+        value = float(start)
+        low = value
+        if high <= low:
+            high = low + interval
+        limit = high + interval * 0.5
+        while value <= limit and len(ticks) < 10000:
+            if math.isfinite(value):
+                ticks.append(value)
+            value += interval
+
+        if axis_name == "x":
+            ax.set_xticks(ticks)
+            ax.set_xlim((high, low) if inverted else (low, high))
+        else:
+            ax.set_yticks(ticks)
+            ax.set_ylim((high, low) if inverted else (low, high))
+        axis._mve_tick_start = float(start)
+        axis._mve_tick_interval = interval
+        self._reapply_axis_tick_label_style(axis)
+
+    def _apply_axis_tick_labels(
+        self,
+        axis: Any,
+        fontsize: float | None = None,
+        color: str | None = None,
+        weight: str | None = None,
+        style: str | None = None,
+        rotation: float | None = None,
+    ) -> None:
+        fontsize = self._axis_tick_label_prop(axis, "fontsize", 10.0) if fontsize is None else fontsize
+        color = self._axis_tick_label_prop(axis, "color", "#000000") if color is None else color
+        weight = self._axis_tick_label_prop(axis, "fontweight", "normal") if weight is None else weight
+        style = self._axis_tick_label_prop(axis, "fontstyle", "normal") if style is None else style
+        rotation = self._axis_tick_label_prop(axis, "rotation", 0.0) if rotation is None else rotation
+
+        axis._mve_tick_label_fontsize = float(fontsize)
+        axis._mve_tick_label_color = color
+        axis._mve_tick_label_fontweight = weight
+        axis._mve_tick_label_fontstyle = style
+        axis._mve_tick_label_rotation = float(rotation)
+        self._reapply_axis_tick_label_style(axis)
+
+    def _reapply_axis_tick_label_style(self, axis: Any) -> None:
+        if not hasattr(axis, "_mve_tick_label_fontsize"):
+            return
+        for label in axis.get_ticklabels():
+            label.set_fontsize(float(axis._mve_tick_label_fontsize))
+            label.set_color(axis._mve_tick_label_color)
+            label.set_fontweight(axis._mve_tick_label_fontweight)
+            label.set_fontstyle(axis._mve_tick_label_fontstyle)
+            label.set_rotation(float(axis._mve_tick_label_rotation))
+
+    def _axis_tick_start(self, axis: Any) -> float:
+        if hasattr(axis, "_mve_tick_start"):
+            return float(axis._mve_tick_start)
+        ticks = self._finite_axis_ticks(axis)
+        if ticks:
+            return float(ticks[0])
+        low, _high = axis.get_view_interval()
+        return float(low)
+
+    def _axis_tick_interval(self, axis: Any) -> float:
+        if hasattr(axis, "_mve_tick_interval"):
+            return float(axis._mve_tick_interval)
+        ticks = self._finite_axis_ticks(axis)
+        for left, right in zip(ticks, ticks[1:]):
+            interval = right - left
+            if interval > 0:
+                return float(interval)
+        return 1.0
+
+    def _axis_tick_label_prop(self, axis: Any, prop: str, default: Any) -> Any:
+        attr = f"_mve_tick_label_{prop}"
+        if hasattr(axis, attr):
+            return getattr(axis, attr)
+        labels = axis.get_ticklabels()
+        visible_labels = [label for label in labels if label.get_visible()]
+        label = visible_labels[0] if visible_labels else (labels[0] if labels else None)
+        if label is None:
+            return default
+        if prop == "fontsize":
+            return float(label.get_fontsize())
+        if prop == "color":
+            return label.get_color()
+        if prop == "fontweight":
+            return label.get_fontweight()
+        if prop == "fontstyle":
+            return label.get_fontstyle()
+        if prop == "rotation":
+            return float(label.get_rotation())
+        return default
+
+    def _finite_axis_ticks(self, axis: Any) -> list[float]:
+        ticks: list[float] = []
+        for tick in axis.get_ticklocs():
+            value = float(tick)
+            if math.isfinite(value):
+                ticks.append(value)
+        return sorted(set(ticks))
 
     def _rebuild_legend(self, legend: Any, **changes: Any) -> None:
         if self._rebuilding_legend:
@@ -594,24 +915,65 @@ class StyleEditor(QMainWindow):
                     self.hover_ref = None
                     self._set_hover_highlight(updated_ref)
                     if not self._suppress_dirty:
-                        self._mark_dirty()
+                        self._mark_dirty(self._active_save_button)
                     self.status.setText("Legend layout updated")
                 return
 
-    def _apply(self, callback: Callable[[], Any]) -> None:
+    def _apply(self, callback: Callable[[], Any], save_button: QPushButton | None = None) -> None:
         if self._building_form:
             return
-        callback()
-        self._mark_dirty()
+        self._active_save_button = save_button
+        try:
+            callback()
+            self._sync_current_line_legend_handle()
+            self._mark_dirty(save_button)
+        finally:
+            self._active_save_button = None
         self._redraw("Updated")
 
-    def _mark_dirty(self) -> None:
+    def _sync_current_line_legend_handle(self) -> None:
+        if self.current_ref is None or self.current_ref.kind != "line":
+            return
+        line = self.current_ref.artist
+        ax = line.axes
+        legend = ax.get_legend()
+        if legend is None:
+            return
+
+        handles = getattr(legend, "legend_handles", None)
+        if handles is None:
+            handles = getattr(legend, "legendHandles", [])
+        try:
+            line_index = list(ax.lines).index(line)
+            handle = list(handles)[line_index]
+        except (ValueError, IndexError, TypeError):
+            return
+
+        self._copy_line_style_to_legend_handle(line, handle)
+
+    def _copy_line_style_to_legend_handle(self, line: Any, handle: Any) -> None:
+        for getter_name, setter_name in [
+            ("get_color", "set_color"),
+            ("get_linewidth", "set_linewidth"),
+            ("get_linestyle", "set_linestyle"),
+            ("get_marker", "set_marker"),
+            ("get_markersize", "set_markersize"),
+            ("get_alpha", "set_alpha"),
+        ]:
+            if hasattr(line, getter_name) and hasattr(handle, setter_name):
+                getattr(handle, setter_name)(getattr(line, getter_name)())
+
+    def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
         self._dirty = True
-        for button in self._save_buttons:
-            button.setEnabled(True)
-            button.setStyleSheet("font-weight: 700; background: #ffcc00;")
+        if save_button is not None and hasattr(save_button, "_mve_editor_widget"):
+            widget = getattr(save_button, "_mve_editor_widget", None)
+            if isinstance(widget, QWidget):
+                self._dirty_widgets.add(widget)
+        if save_button is not None:
+            save_button.setEnabled(True)
+            save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
         self.status.setText("Preview updated. Click Save to keep it.")
 
     def _mark_position_dirty(self) -> None:
@@ -622,30 +984,89 @@ class StyleEditor(QMainWindow):
             self._position_save_button.setEnabled(True)
             self._position_save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
 
-    def _save_current_changes(self) -> None:
+    def _save_current_changes(self, editor_widget: QWidget | None = None) -> None:
         if self.current_ref is None:
             return
+        old_suppress_dirty = self._suppress_dirty
+        self._suppress_dirty = True
+        try:
+            self._commit_editor(editor_widget)
+            for widget in list(self._dirty_widgets):
+                if widget is not editor_widget:
+                    self._commit_editor(widget)
+            QApplication.processEvents()
+        finally:
+            self._suppress_dirty = old_suppress_dirty
         self._committed_snapshot = snapshot_artist(
             self.current_ref.kind,
             self.current_ref.path,
             self.current_ref.artist,
         )
         self._dirty = False
+        self._dirty_widgets = set()
         for button in self._save_buttons:
             button.setEnabled(False)
             button.setStyleSheet("")
         self.status.setText(f"Saved: {self.current_ref.label}")
 
+    def _save_current_changes_from_sender(self) -> None:
+        sender = self.sender()
+        editor_widget = getattr(sender, "_mve_editor_widget", None)
+        self._save_current_changes(editor_widget)
+
+    def _commit_editor(self, widget: QWidget | None = None) -> None:
+        if widget is not None and not isinstance(widget, QWidget):
+            widget = None
+        widget = widget or QApplication.focusWidget()
+        if isinstance(widget, QDoubleSpinBox):
+            widget.interpretText()
+            if hasattr(widget, "_mve_commit"):
+                widget._mve_commit()
+            if widget.hasFocus():
+                widget.clearFocus()
+        elif isinstance(widget, QLineEdit):
+            if hasattr(widget, "_mve_commit"):
+                widget._mve_commit()
+            else:
+                widget.editingFinished.emit()
+            if widget.hasFocus():
+                widget.clearFocus()
+
+    def _commit_all_form_editors(self, skip: QWidget | None = None) -> None:
+        for widget in self.form_host.findChildren(QDoubleSpinBox):
+            if widget is skip:
+                continue
+            widget.interpretText()
+            if hasattr(widget, "_mve_commit"):
+                widget._mve_commit()
+        for widget in self.form_host.findChildren(QLineEdit):
+            if widget is skip:
+                continue
+            if isinstance(widget.parent(), QDoubleSpinBox):
+                continue
+            if hasattr(widget, "_mve_commit"):
+                widget._mve_commit()
+            else:
+                widget.editingFinished.emit()
+
     def _save_current_legend_position(self) -> None:
         if self.current_ref is None or self.current_ref.kind != "legend":
             return
-        self._capture_current_legend_position(self.current_ref.artist)
+        self._suppress_dirty = True
+        try:
+            self._capture_current_legend_position(self.current_ref.artist)
+        finally:
+            self._suppress_dirty = False
         self._committed_snapshot = snapshot_artist(
             self.current_ref.kind,
             self.current_ref.path,
             self.current_ref.artist,
         )
+        self._dirty = False
         self._legend_position_dirty = False
+        for button in self._save_buttons:
+            button.setEnabled(False)
+            button.setStyleSheet("")
         if self._position_save_button is not None:
             self._position_save_button.setEnabled(False)
             self._position_save_button.setStyleSheet("")
@@ -669,7 +1090,9 @@ class StyleEditor(QMainWindow):
         artist = ref.artist
         props = snapshot["props"]
         kind = snapshot["kind"]
-        if kind == "axes":
+        if kind == "figure":
+            self._apply_figure_size(float(props["width"]), float(props["height"]))
+        elif kind == "axes":
             artist.set_facecolor(props["facecolor"])
             artist.set_xlabel(props["xlabel"])
             artist.set_ylabel(props["ylabel"])
@@ -690,6 +1113,18 @@ class StyleEditor(QMainWindow):
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])
             artist.set_fontstyle(props["fontstyle"])
+        elif kind == "axis":
+            axis_name = props["axis"]
+            self._set_axis_scale(artist, axis_name, props["scale"])
+            self._apply_axis_ticks(artist, axis_name, props["tick_start"], props["tick_interval"])
+            self._apply_axis_tick_labels(
+                artist,
+                fontsize=props["tick_label_fontsize"],
+                color=props["tick_label_color"],
+                weight=props["tick_label_weight"],
+                style=props["tick_label_style"],
+                rotation=props["tick_label_rotation"],
+            )
         elif kind == "legend":
             self._restore_legend_snapshot(artist, props)
         elif kind == "spine":
@@ -727,8 +1162,16 @@ class StyleEditor(QMainWindow):
             self._suppress_dirty = False
 
     def _redraw(self, message: str) -> None:
+        self._fit_figure_to_canvas()
         self.canvas.draw_idle()
         self.status.setText(message)
+
+    def _fit_figure_to_canvas(self) -> None:
+        self._enforce_saved_figure_size()
+        try:
+            self.fig.tight_layout()
+        except Exception:
+            pass
 
     def _export(self) -> None:
         self._discard_unsaved_preview()
@@ -757,11 +1200,11 @@ class StyleEditor(QMainWindow):
             QMessageBox.information(self, "Nothing selected", "Select an object first.")
             return
 
-        if ref.kind == "axes":
+        if ref.kind in {"figure", "axes"}:
             QMessageBox.information(
                 self,
-                "Axes cannot be deleted",
-                "This prototype does not delete whole axes yet.",
+                "Object cannot be deleted",
+                "This prototype does not delete whole figures or axes yet.",
             )
             return
 

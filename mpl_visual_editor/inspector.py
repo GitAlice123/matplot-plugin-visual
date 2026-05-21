@@ -29,7 +29,7 @@ class ArtistRef:
 def iter_artist_refs(fig: Figure) -> list[ArtistRef]:
     """Return editable artists in a predictable order."""
 
-    refs: list[ArtistRef] = []
+    refs: list[ArtistRef] = [ArtistRef("Figure", "figure", ("figure",), fig)]
     for ax_index, ax in enumerate(fig.axes):
         refs.append(ArtistRef(f"Axes {ax_index}", "axes", ("axes", ax_index), ax))
 
@@ -56,6 +56,22 @@ def iter_artist_refs(fig: Figure) -> list[ArtistRef]:
                 "text",
                 ("axes", ax_index, "ylabel"),
                 ax.yaxis.label,
+            )
+        )
+        refs.append(
+            ArtistRef(
+                f"Axes {ax_index} / X axis",
+                "axis",
+                ("axes", ax_index, "xaxis"),
+                ax.xaxis,
+            )
+        )
+        refs.append(
+            ArtistRef(
+                f"Axes {ax_index} / Y axis",
+                "axis",
+                ("axes", ax_index, "yaxis"),
+                ax.yaxis,
             )
         )
 
@@ -97,6 +113,8 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
     """Resolve an exported artist path against a figure."""
 
     parts = tuple(path)
+    if parts == ("figure",):
+        return fig
     if len(parts) < 2 or parts[0] != "axes":
         raise ValueError(f"Unsupported artist path: {parts!r}")
 
@@ -111,6 +129,10 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
         return ax.xaxis.label
     if target == "ylabel":
         return ax.yaxis.label
+    if target == "xaxis":
+        return ax.xaxis
+    if target == "yaxis":
+        return ax.yaxis
     if target == "lines":
         return ax.lines[int(parts[3])]
     if target == "legend":

@@ -3,14 +3,19 @@
 Import this file after your original plotting code and call apply_style(fig).
 """
 
-STYLE_PATCHES = [{'kind': 'axes',
+import math
+
+STYLE_PATCHES = [{'kind': 'figure',
+  'path': ('figure',),
+  'props': {'aspect': 1.8666666666666667, 'height': 3.75, 'width': 7.0}},
+ {'kind': 'axes',
   'path': ('axes', 0),
   'props': {'facecolor': '#ffffff',
             'title': '',
             'xgrid': True,
-            'xlabel': 'Time',
+            'xlabel': 'x',
             'ygrid': True,
-            'ylabel': 'Throughput'}},
+            'ylabel': 'y'}},
  {'kind': 'text',
   'path': ('axes', 0, 'title'),
   'props': {'color': '#000000',
@@ -21,24 +26,46 @@ STYLE_PATCHES = [{'kind': 'axes',
  {'kind': 'text',
   'path': ('axes', 0, 'xlabel'),
   'props': {'color': '#000000',
-            'fontsize': 10.0,
+            'fontsize': 22.0,
             'fontstyle': 'normal',
             'fontweight': 'normal',
-            'text': 'Time'}},
+            'text': 'x'}},
  {'kind': 'text',
   'path': ('axes', 0, 'ylabel'),
   'props': {'color': '#000000',
-            'fontsize': 10.0,
+            'fontsize': 21.0,
             'fontstyle': 'normal',
             'fontweight': 'normal',
-            'text': 'Throughput'}},
+            'text': 'y'}},
+ {'kind': 'axis',
+  'path': ('axes', 0, 'xaxis'),
+  'props': {'axis': 'x',
+            'scale': 'linear',
+            'tick_interval': 0.25,
+            'tick_label_color': '#000000',
+            'tick_label_fontsize': 22.0,
+            'tick_label_rotation': 0.0,
+            'tick_label_style': 'normal',
+            'tick_label_weight': 'normal',
+            'tick_start': 0.75}},
+ {'kind': 'axis',
+  'path': ('axes', 0, 'yaxis'),
+  'props': {'axis': 'y',
+            'scale': 'linear',
+            'tick_interval': 1.0,
+            'tick_label_color': '#000000',
+            'tick_label_fontsize': 23.0,
+            'tick_label_rotation': 0.0,
+            'tick_label_style': 'normal',
+            'tick_label_weight': 'normal',
+            'tick_start': 0.0}},
  {'kind': 'line',
   'path': ('axes', 0, 'lines', 0),
   'props': {'alpha': None,
             'color': '#1f77b4',
             'label': 'A',
             'linestyle': '-',
-            'linewidth': 1.5,
+            'linewidth': 5.25,
             'marker': 'o',
             'markersize': 6.0}},
  {'kind': 'line',
@@ -47,16 +74,25 @@ STYLE_PATCHES = [{'kind': 'axes',
             'color': '#ff7f0e',
             'label': 'B',
             'linestyle': '-',
-            'linewidth': 1.5,
+            'linewidth': 5.25,
             'marker': 's',
             'markersize': 6.0}},
  {'kind': 'legend',
   'path': ('axes', 0, 'legend'),
-  'props': {'edgecolor': '#cccccc',
+  'props': {'bbox_to_anchor': (np.float64(0.0448521818432059), np.float64(0.9435881822066012)),
+            'borderaxespad': 0.0,
+            'borderpad': 0.4,
+            'columnspacing': 2.0,
+            'edgecolor': '#cccccc',
             'facecolor': '#ffffff',
-            'fontsize': 10.0,
+            'fontsize': 28.0,
             'frame_alpha': 0.8,
             'frame_on': True,
+            'handlelength': 2.2,
+            'handletextpad': 0.8,
+            'labelspacing': 0.5,
+            'loc': 'upper left',
+            'ncols': 1,
             'visible': True}},
  {'kind': 'spine',
   'path': ('axes', 0, 'spines', 'left'),
@@ -74,6 +110,8 @@ STYLE_PATCHES = [{'kind': 'axes',
 
 def _resolve(fig, path):
     parts = tuple(path)
+    if parts == ("figure",):
+        return fig
     ax = fig.axes[int(parts[1])]
     if len(parts) == 2:
         return ax
@@ -84,6 +122,10 @@ def _resolve(fig, path):
         return ax.xaxis.label
     if target == "ylabel":
         return ax.yaxis.label
+    if target == "xaxis":
+        return ax.xaxis
+    if target == "yaxis":
+        return ax.yaxis
     if target == "lines":
         return ax.lines[int(parts[3])]
     if target == "legend":
@@ -103,7 +145,11 @@ def apply_style(fig):
         kind = patch["kind"]
         props = patch["props"]
 
-        if kind == "axes":
+        if kind == "figure":
+            artist.set_size_inches(props["width"], props["height"], forward=True)
+            artist._mve_width = float(props["width"])
+            artist._mve_height = float(props["height"])
+        elif kind == "axes":
             artist.set_facecolor(props["facecolor"])
             artist.set_xlabel(props["xlabel"])
             artist.set_ylabel(props["ylabel"])
@@ -124,7 +170,37 @@ def apply_style(fig):
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])
             artist.set_fontstyle(props["fontstyle"])
+        elif kind == "axis":
+            ax = artist.axes
+            axis_name = props["axis"]
+            if axis_name == "x":
+                ax.set_xscale(props["scale"])
+            else:
+                ax.set_yscale(props["scale"])
+            _apply_axis_ticks(ax, axis_name, props["tick_start"], props["tick_interval"])
+            _apply_axis_tick_labels(
+                artist,
+                props["tick_label_fontsize"],
+                props["tick_label_color"],
+                props["tick_label_weight"],
+                props["tick_label_style"],
+                props["tick_label_rotation"],
+            )
         elif kind == "legend":
+            ax = artist.axes
+            artist = ax.legend(
+                loc=props["loc"],
+                bbox_to_anchor=props["bbox_to_anchor"],
+                ncols=props["ncols"],
+                fontsize=props["fontsize"],
+                frameon=props["frame_on"],
+                borderpad=props["borderpad"],
+                labelspacing=props["labelspacing"],
+                handlelength=props["handlelength"],
+                handletextpad=props["handletextpad"],
+                borderaxespad=props["borderaxespad"],
+                columnspacing=props["columnspacing"],
+            )
             artist.set_visible(props["visible"])
             for text in artist.get_texts():
                 if props["fontsize"] is not None:
@@ -139,5 +215,56 @@ def apply_style(fig):
             artist.set_edgecolor(props["color"])
             artist.set_linewidth(props["linewidth"])
 
+    try:
+        fig.tight_layout()
+    except Exception:
+        pass
     fig.canvas.draw_idle()
     return fig
+
+
+def _apply_axis_ticks(ax, axis_name, start, interval):
+    interval = float(interval)
+    if interval <= 0:
+        return
+    if axis_name == "x":
+        low, high = ax.get_xlim()
+    else:
+        low, high = ax.get_ylim()
+    inverted = high < low
+    if high < low:
+        low, high = high, low
+    ticks = []
+    value = float(start)
+    low = value
+    if high <= low:
+        high = low + interval
+    limit = high + interval * 0.5
+    while value <= limit and len(ticks) < 10000:
+        if math.isfinite(value):
+            ticks.append(value)
+        value += interval
+    if axis_name == "x":
+        ax.set_xticks(ticks)
+        ax.set_xlim((high, low) if inverted else (low, high))
+        ax.xaxis._mve_tick_start = float(start)
+        ax.xaxis._mve_tick_interval = interval
+    else:
+        ax.set_yticks(ticks)
+        ax.set_ylim((high, low) if inverted else (low, high))
+        ax.yaxis._mve_tick_start = float(start)
+        ax.yaxis._mve_tick_interval = interval
+
+
+def _apply_axis_tick_labels(axis, fontsize, color, weight, style, rotation):
+    axis._mve_tick_label_fontsize = float(fontsize)
+    axis._mve_tick_label_color = color
+    axis._mve_tick_label_fontweight = weight
+    axis._mve_tick_label_fontstyle = style
+    axis._mve_tick_label_rotation = float(rotation)
+    for label in axis.get_ticklabels():
+        label.set_fontsize(float(fontsize))
+        label.set_color(color)
+        label.set_fontweight(weight)
+        label.set_fontstyle(style)
+        label.set_rotation(float(rotation))
