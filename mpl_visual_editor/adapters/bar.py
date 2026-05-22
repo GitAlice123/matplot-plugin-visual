@@ -31,3 +31,7 @@ class BarAdapter(BaseAdapter):
                     )
         return refs
 
+    def delete(self, ref: ArtistRef) -> None:
+        for patch in list(ref.artist.patches):
+            patch.remove()
+

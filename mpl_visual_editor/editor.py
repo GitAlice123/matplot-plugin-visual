@@ -43,10 +43,10 @@ from PySide6.QtWidgets import (
 )
 
 from .exporter import export_style
-from .exporter import _snapshot as snapshot_artist
 from .adapters.registry import get_adapter
 from .inspector import iter_artist_refs
 from .refs import ArtistRef
+from .snapshots import snapshot_artist
 
 
 class _AspectCanvasHost(QWidget):
@@ -1760,20 +1760,7 @@ class StyleEditor(QMainWindow):
         self._redraw(f"Deleted: {ref.label}")
 
     def _delete_ref(self, ref: ArtistRef) -> None:
-        artist = ref.artist
-        if ref.kind == "text":
-            artist.set_text("")
-        elif ref.kind == "text_group":
-            for text in artist:
-                text.set_text("")
-        elif ref.kind == "line":
-            artist.remove()
-        elif ref.kind == "bar":
-            for patch in list(artist.patches):
-                patch.remove()
-        elif ref.kind == "legend":
-            artist.remove()
-        elif ref.kind == "spine":
-            artist.set_visible(False)
-        else:
+        adapter = get_adapter(ref.kind)
+        if adapter is None:
             raise ValueError(f"Delete is not supported for {ref.kind!r}")
+        adapter.delete(ref)

@@ -13,6 +13,7 @@ class ArtistAdapter(Protocol):
     """Minimal adapter contract used by the first registry-backed inspector."""
 
     kind: str
+    aliases: tuple[str, ...]
 
     def inspect(self, fig: Figure, claimed: set[int]) -> list[ArtistRef]:
         """Return refs owned by this adapter and add claimed artist ids."""
@@ -41,6 +42,7 @@ class ArtistAdapter(Protocol):
 
 class BaseAdapter:
     kind = ""
+    aliases: tuple[str, ...] = ()
 
     def inspect(self, fig: Figure, claimed: set[int]) -> list[ArtistRef]:
         return []

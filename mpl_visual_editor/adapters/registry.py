@@ -37,7 +37,7 @@ def registered_adapters() -> list[ArtistAdapter]:
 
 def get_adapter(kind: str) -> ArtistAdapter | None:
     for adapter in _ADAPTERS:
-        if adapter.kind == kind:
+        if adapter.kind == kind or kind in getattr(adapter, "aliases", ()):
             return adapter
     return None
 

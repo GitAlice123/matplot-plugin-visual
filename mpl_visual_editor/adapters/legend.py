@@ -30,3 +30,6 @@ class LegendAdapter(BaseAdapter):
                 )
         return refs
 
+    def delete(self, ref: ArtistRef) -> None:
+        ref.artist.remove()
+

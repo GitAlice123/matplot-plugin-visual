@@ -10,6 +10,7 @@ from .base import BaseAdapter
 
 class TextAdapter(BaseAdapter):
     kind = "text"
+    aliases = ("text_group",)
 
     def inspect(self, fig: Figure, claimed: set[int]) -> list[ArtistRef]:
         refs: list[ArtistRef] = []
@@ -45,3 +46,10 @@ class TextAdapter(BaseAdapter):
                     )
                 )
         return refs
+
+    def delete(self, ref: ArtistRef) -> None:
+        if ref.kind == "text_group":
+            for text in ref.artist:
+                text.set_text("")
+            return
+        ref.artist.set_text("")

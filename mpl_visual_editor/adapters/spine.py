@@ -26,3 +26,6 @@ class SpineAdapter(BaseAdapter):
                 )
         return refs
 
+    def delete(self, ref: ArtistRef) -> None:
+        ref.artist.set_visible(False)
+
