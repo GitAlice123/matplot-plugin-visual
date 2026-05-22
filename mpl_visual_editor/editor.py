@@ -502,6 +502,10 @@ class StyleEditor(QMainWindow):
 
         artist = ref.artist
         self.form.addRow(QLabel(f"{ref.kind}: {ref.label}"))
+        adapter = get_adapter(ref.kind)
+        if adapter is not None and adapter.build_form(ref, self):
+            self._building_form = False
+            return
 
         if ref.kind == "figure":
             width, height = self._figure_size()
@@ -516,14 +520,6 @@ class StyleEditor(QMainWindow):
             self._add_color("Face color", artist.get_facecolor(), artist.set_facecolor)
             self._add_bool("X grid", any(line.get_visible() for line in artist.get_xgridlines()), lambda v: artist.grid(v, axis="x"))
             self._add_bool("Y grid", any(line.get_visible() for line in artist.get_ygridlines()), lambda v: artist.grid(v, axis="y"))
-        elif ref.kind == "line":
-            self._add_text("Label", artist.get_label(), artist.set_label)
-            self._add_color("Color", artist.get_color(), artist.set_color)
-            self._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
-            self._add_choice("Line style", artist.get_linestyle(), ["-", "--", "-.", ":", "None", " "], artist.set_linestyle)
-            self._add_choice("Marker", artist.get_marker(), ["None", " ", ".", "o", "s", "^", "v", "D", "x", "+", "*"], artist.set_marker)
-            self._add_float("Marker size", artist.get_markersize(), artist.set_markersize, 0.0, 40.0, 0.5)
-            self._add_float("Alpha", artist.get_alpha() if artist.get_alpha() is not None else 1.0, artist.set_alpha, 0.0, 1.0, 0.05)
         elif ref.kind == "bar":
             first_patch = self._first_bar_patch(artist)
             if first_patch is None:
@@ -583,10 +579,6 @@ class StyleEditor(QMainWindow):
             self._add_float("Label spacing", artist.labelspacing, lambda v: self._rebuild_current_legend(labelspacing=v), 0.0, 5.0, 0.1)
             self._add_float("Handle length", artist.handlelength, lambda v: self._rebuild_current_legend(handlelength=v), 0.0, 8.0, 0.1)
             self._add_float("Handle text pad", artist.handletextpad, lambda v: self._rebuild_current_legend(handletextpad=v), 0.0, 5.0, 0.1)
-        elif ref.kind == "spine":
-            self._add_bool("Visible", artist.get_visible(), artist.set_visible)
-            self._add_color("Color", artist.get_edgecolor(), artist.set_edgecolor)
-            self._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
         elif ref.kind == "unsupported":
             adapter = get_adapter("unsupported")
             suggested = adapter.suggested_adapter(artist) if adapter is not None else f"{type(artist).__name__}Adapter"

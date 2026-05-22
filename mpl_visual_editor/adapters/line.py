@@ -34,3 +34,14 @@ class LineAdapter(BaseAdapter):
     def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
         return {"kind": ref.kind, "artist": self._highlight_artist(ref.artist, boost_zorder=True)}
 
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        editor._add_text("Label", artist.get_label(), artist.set_label)
+        editor._add_color("Color", artist.get_color(), artist.set_color)
+        editor._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
+        editor._add_choice("Line style", artist.get_linestyle(), ["-", "--", "-.", ":", "None", " "], artist.set_linestyle)
+        editor._add_choice("Marker", artist.get_marker(), ["None", " ", ".", "o", "s", "^", "v", "D", "x", "+", "*"], artist.set_marker)
+        editor._add_float("Marker size", artist.get_markersize(), artist.set_markersize, 0.0, 40.0, 0.5)
+        editor._add_float("Alpha", artist.get_alpha() if artist.get_alpha() is not None else 1.0, artist.set_alpha, 0.0, 1.0, 0.05)
+        return True
+

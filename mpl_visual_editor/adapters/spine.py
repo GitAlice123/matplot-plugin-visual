@@ -45,3 +45,10 @@ class SpineAdapter(BaseAdapter):
     def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
         return {"kind": ref.kind, "artist": self._highlight_artist(ref.artist, boost_zorder=True)}
 
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        editor._add_bool("Visible", artist.get_visible(), artist.set_visible)
+        editor._add_color("Color", artist.get_edgecolor(), artist.set_edgecolor)
+        editor._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
+        return True
+

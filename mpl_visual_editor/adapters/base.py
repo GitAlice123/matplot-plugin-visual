@@ -28,8 +28,8 @@ class ArtistAdapter(Protocol):
     def restore_highlight(self, ref: ArtistRef, editor: Any, state: Any) -> None:
         """Restore state returned by ``highlight``."""
 
-    def build_form(self, ref: ArtistRef, editor: Any) -> None:
-        """Populate editor controls for this ref."""
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        """Populate editor controls for this ref. Return true when handled."""
 
     def snapshot(self, ref: ArtistRef) -> dict[str, Any]:
         """Return serializable style properties for this ref."""
@@ -105,8 +105,8 @@ class BaseAdapter:
         if "zorder" in state:
             artist.set_zorder(state["zorder"])
 
-    def build_form(self, ref: ArtistRef, editor: Any) -> None:
-        return None
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        return False
 
     def snapshot(self, ref: ArtistRef) -> dict[str, Any]:
         return {}
