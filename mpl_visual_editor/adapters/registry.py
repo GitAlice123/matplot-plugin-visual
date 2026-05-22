@@ -15,11 +15,13 @@ from .fill import FillAdapter
 from .figure import FigureAdapter
 from .legend import LegendAdapter
 from .line import LineAdapter
+from .patch import PatchAdapter
 from .scatter import ScatterAdapter
 from .shape import ShapeAdapter
 from .spine import SpineAdapter
 from .text import TextAdapter
 from .unsupported import UnsupportedAdapter
+from .wedge import WedgeAdapter
 
 
 _ADAPTERS: list[ArtistAdapter] = [
@@ -33,6 +35,8 @@ _ADAPTERS: list[ArtistAdapter] = [
     ArrowAdapter(),
     ScatterAdapter(),
     BarAdapter(),
+    WedgeAdapter(),
+    PatchAdapter(),
     LegendAdapter(),
     SpineAdapter(),
     UnsupportedAdapter(),

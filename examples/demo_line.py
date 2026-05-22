@@ -9,7 +9,9 @@ if str(ROOT) not in sys.path:
 
 import matplotlib.pyplot as plt
 
-from mpl_visual_editor import edit
+from mpl_visual_editor import style_figure
+
+STYLE_MODE = "edit"  # "edit": open GUI; "apply": apply saved patch; "off": raw plot.
 
 
 def main() -> None:
@@ -22,7 +24,13 @@ def main() -> None:
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    edit(fig)
+    style_figure(
+        fig,
+        mode=STYLE_MODE,
+        name="demo_line",
+        source_path=__file__,
+        style_dir=ROOT / "examples" / "styles",
+    )
 
 
 if __name__ == "__main__":

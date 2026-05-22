@@ -46,11 +46,16 @@ def snapshot_artist(
         }
     elif kind == "line":
         props = {
+            "visible": bool(artist.get_visible()),
             "color": _color(artist.get_color()),
             "linewidth": float(artist.get_linewidth()),
             "linestyle": artist.get_linestyle(),
+            "drawstyle": artist.get_drawstyle(),
             "marker": artist.get_marker(),
             "markersize": float(artist.get_markersize()),
+            "markerfacecolor": _color(artist.get_markerfacecolor()),
+            "markeredgecolor": _color(artist.get_markeredgecolor()),
+            "markeredgewidth": float(artist.get_markeredgewidth()),
             "alpha": artist.get_alpha(),
             "label": artist.get_label(),
         }
@@ -61,11 +66,36 @@ def snapshot_artist(
         props = {
             "visible": bool(artist.get_visible()),
             "label": artist.get_label(),
+            "marker": _path_collection_marker(artist),
             "facecolor": _first_color(artist.get_facecolors()),
             "edgecolor": _first_color(artist.get_edgecolors()),
             "linewidth": _first_float(artist.get_linewidths(), 1.0),
             "size": _first_float(artist.get_sizes(), 36.0),
             "alpha": artist.get_alpha(),
+        }
+    elif kind == "wedge":
+        center_x, center_y = artist.center
+        props = {
+            "visible": bool(artist.get_visible()),
+            "facecolor": _color(artist.get_facecolor()),
+            "edgecolor": _color(artist.get_edgecolor()),
+            "linewidth": float(artist.get_linewidth()),
+            "alpha": artist.get_alpha(),
+            "hatch": artist.get_hatch() or "",
+            "center": [float(center_x), float(center_y)],
+            "radius": float(artist.r),
+            "width": None if artist.width is None else float(artist.width),
+            "theta1": float(artist.theta1),
+            "theta2": float(artist.theta2),
+        }
+    elif kind == "patch":
+        props = {
+            "visible": bool(artist.get_visible()),
+            "facecolor": _color(artist.get_facecolor()),
+            "edgecolor": _color(artist.get_edgecolor()),
+            "linewidth": float(artist.get_linewidth()),
+            "alpha": artist.get_alpha(),
+            "hatch": artist.get_hatch() or "",
         }
     elif kind == "shape":
         props = shape_props(artist)
@@ -169,6 +199,7 @@ def snapshot_artist(
             "frame_alpha": frame.get_alpha(),
             "facecolor": _color(frame.get_facecolor()),
             "edgecolor": _color(frame.get_edgecolor()),
+            "frame_linewidth": float(frame.get_linewidth()),
             "borderpad": float(artist.borderpad),
             "labelspacing": float(artist.labelspacing),
             "handlelength": float(artist.handlelength),
@@ -260,6 +291,9 @@ def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
                     "linestyle": handle.get_linestyle(),
                     "marker": handle.get_marker() if hasattr(handle, "get_marker") else "None",
                     "markersize": float(handle.get_markersize()) if hasattr(handle, "get_markersize") else 6.0,
+                    "markerfacecolor": _color(handle.get_markerfacecolor()) if hasattr(handle, "get_markerfacecolor") else None,
+                    "markeredgecolor": _color(handle.get_markeredgecolor()) if hasattr(handle, "get_markeredgecolor") else None,
+                    "markeredgewidth": float(handle.get_markeredgewidth()) if hasattr(handle, "get_markeredgewidth") else 1.0,
                     "alpha": handle.get_alpha(),
                 }
             )
@@ -304,6 +338,13 @@ def _marker_name(path: Any) -> str | None:
         if _paths_match(path, marker_path):
             return marker
     return None
+
+
+def _path_collection_marker(collection: Any) -> str:
+    paths = collection.get_paths() if hasattr(collection, "get_paths") else []
+    if not paths:
+        return "o"
+    return _marker_name(paths[0]) or "o"
 
 
 def _paths_match(left: Any, right: Any) -> bool:

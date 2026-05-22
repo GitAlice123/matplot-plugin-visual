@@ -91,6 +91,9 @@ def _legend_handles_from_specs(specs: list[dict[str, Any]]) -> list[Any]:
                     linestyle=spec.get("linestyle", "-"),
                     marker=spec.get("marker", "None"),
                     markersize=spec.get("markersize", 6.0),
+                    markerfacecolor=spec.get("markerfacecolor"),
+                    markeredgecolor=spec.get("markeredgecolor"),
+                    markeredgewidth=spec.get("markeredgewidth", 1.0),
                     label=spec.get("label", ""),
                     alpha=spec.get("alpha"),
                 )
@@ -235,21 +238,46 @@ def apply_style(fig):
                 artist.set_data(props["xdata"], props["ydata"])
                 artist._mve_xdata = list(props["xdata"])
                 artist._mve_ydata = list(props["ydata"])
+            artist.set_visible(props.get("visible", True))
             artist.set_color(props["color"])
             artist.set_linewidth(props["linewidth"])
             artist.set_linestyle(props["linestyle"])
+            artist.set_drawstyle(props.get("drawstyle", "default"))
             artist.set_marker(props["marker"])
             artist.set_markersize(props["markersize"])
+            artist.set_markerfacecolor(props.get("markerfacecolor", props["color"]))
+            artist.set_markeredgecolor(props.get("markeredgecolor", props["color"]))
+            artist.set_markeredgewidth(props.get("markeredgewidth", 1.0))
             artist.set_alpha(props["alpha"])
             artist.set_label(props["label"])
         elif kind == "scatter":
             artist.set_visible(props["visible"])
             artist.set_label(props["label"])
+            artist.set_paths([_marker_path(props.get("marker", "o"))])
             artist.set_facecolor(props["facecolor"])
             artist.set_edgecolor(props["edgecolor"])
             artist.set_linewidth(props["linewidth"])
             artist.set_sizes([props["size"]] * max(1, len(artist.get_offsets())))
             artist.set_alpha(props["alpha"])
+        elif kind == "wedge":
+            artist.set_visible(props["visible"])
+            artist.set_facecolor(props["facecolor"])
+            artist.set_edgecolor(props["edgecolor"])
+            artist.set_linewidth(props["linewidth"])
+            artist.set_alpha(props["alpha"])
+            artist.set_hatch(props.get("hatch", ""))
+            artist.set_center(tuple(props["center"]))
+            artist.set_radius(props["radius"])
+            artist.set_width(props.get("width"))
+            artist.set_theta1(props["theta1"])
+            artist.set_theta2(props["theta2"])
+        elif kind == "patch":
+            artist.set_visible(props["visible"])
+            artist.set_facecolor(props["facecolor"])
+            artist.set_edgecolor(props["edgecolor"])
+            artist.set_linewidth(props["linewidth"])
+            artist.set_alpha(props["alpha"])
+            artist.set_hatch(props.get("hatch", ""))
         elif kind == "fill":
             apply_fill_props(artist.axes, props, artist)
         elif kind == "arrow":
@@ -325,6 +353,7 @@ def apply_style(fig):
             frame.set_alpha(props["frame_alpha"])
             frame.set_facecolor(props["facecolor"])
             frame.set_edgecolor(props["edgecolor"])
+            frame.set_linewidth(props.get("frame_linewidth", 1.0))
         elif kind == "spine":
             artist.set_visible(props["visible"])
             artist.set_edgecolor(props["color"])
@@ -405,6 +434,11 @@ def _set_bar_width_centered(patch, width):
     signed_width = math.copysign(width, old_width if old_width else 1.0)
     patch.set_width(signed_width)
     patch.set_x(center - signed_width / 2.0)
+
+
+def _marker_path(marker):
+    marker_style = MarkerStyle(marker)
+    return marker_style.get_path().transformed(marker_style.get_transform())
 
 
 def _legend_handles_from_specs(specs):

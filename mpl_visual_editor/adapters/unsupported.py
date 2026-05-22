@@ -63,6 +63,8 @@ class UnsupportedAdapter(BaseAdapter):
             "FancyArrowPatch": "ArrowAdapter",
             "Annotation": "AnnotationAdapter",
             "ErrorbarContainer": "ErrorbarAdapter",
+            "Wedge": "WedgeAdapter",
+            "PathPatch": "PatchAdapter",
         }
         return suggestions.get(name, f"{name}Adapter")
 

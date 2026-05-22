@@ -129,8 +129,17 @@ class ShapeAdapter(BaseAdapter):
             editor._add_float("Height", props["height"], lambda v: self._set_shape(artist, height=v), 1e-12, 1e12, 0.1, decimals=4)
             editor._add_float("Angle", props["angle"], lambda v: self._set_shape(artist, angle=v), -360.0, 360.0, 1.0)
             editor._add_color("Fill color", props["facecolor"], lambda v: self._set_shape(artist, facecolor=v))
-            editor._add_color("Edge color", props["edgecolor"], lambda v: self._set_shape(artist, edgecolor=v))
-            editor._add_float("Line width", props["linewidth"], lambda v: self._set_shape(artist, linewidth=v), 0.0, 50.0, 0.25)
+            edge_width_widget = None
+
+            def set_border(enabled: bool) -> None:
+                width = float(edge_width_widget.value()) if edge_width_widget is not None else float(props["linewidth"])
+                self._set_shape(artist, linewidth=max(width, 1.0) if enabled else 0.0)
+
+            border = editor._add_bool("Border", float(props["linewidth"]) > 0, set_border)
+            edge_color = editor._add_color("Edge color", props["edgecolor"], lambda v: self._set_shape(artist, edgecolor=v))
+            edge_width_widget = editor._add_float("Line width", props["linewidth"], lambda v: self._set_shape(artist, linewidth=v), 0.0, 50.0, 0.25)
+            border.toggled.connect(lambda checked: editor._set_controls_enabled([edge_color, edge_width_widget], checked))
+            editor._set_controls_enabled([edge_color, edge_width_widget], border.isChecked())
         editor._add_float("Alpha", props["alpha"] if props["alpha"] is not None else 1.0, lambda v: self._set_shape(artist, alpha=v), 0.0, 1.0, 0.05)
         editor._add_position_save_button("Save placement")
 
@@ -147,7 +156,10 @@ class ShapeAdapter(BaseAdapter):
         editor._add_choice("Weight", props["fontweight"], ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._set_textbox(artist, fontweight=v))
         editor._add_choice("Style", props["fontstyle"], ["normal", "italic", "oblique"], lambda v: self._set_textbox(artist, fontstyle=v))
         editor._add_color("Box fill", props["facecolor"], lambda v: self._set_textbox(artist, facecolor=v))
-        editor._add_color("Box edge", props["edgecolor"], lambda v: self._set_textbox(artist, edgecolor=v))
+        box_border = editor._add_bool("Box border", _color_enabled(props["edgecolor"]), lambda v: self._set_textbox(artist, edgecolor="#222222" if v else "none"))
+        box_edge = editor._add_color("Box edge", props["edgecolor"], lambda v: self._set_textbox(artist, edgecolor=v))
+        box_border.toggled.connect(lambda checked: editor._set_controls_enabled([box_edge], checked))
+        editor._set_controls_enabled([box_edge], box_border.isChecked())
         editor._add_float("Box alpha", props["box_alpha"] if props["box_alpha"] is not None else 0.85, lambda v: self._set_textbox(artist, box_alpha=v), 0.0, 1.0, 0.05)
         editor._add_position_save_button("Save placement")
 
@@ -160,3 +172,9 @@ class ShapeAdapter(BaseAdapter):
         props = textbox_props(artist)
         props.update(changes)
         apply_textbox_props(artist.axes, props, artist)
+
+
+def _color_enabled(value: Any) -> bool:
+    if value is None:
+        return False
+    return str(value).lower() not in {"none", "transparent", ""}

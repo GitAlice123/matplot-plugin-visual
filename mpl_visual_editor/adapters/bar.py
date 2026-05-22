@@ -65,8 +65,17 @@ class BarAdapter(BaseAdapter):
         editor._add_bool("Visible", all(patch.get_visible() for patch in artist.patches), lambda v: editor._set_bar_visible(artist, v))
         editor._add_text("Label", artist.get_label(), artist.set_label)
         editor._add_color("Fill color", first_patch.get_facecolor(), lambda v: editor._set_bar_facecolor(artist, v))
-        editor._add_color("Edge color", first_patch.get_edgecolor(), lambda v: editor._set_bar_edgecolor(artist, v))
-        editor._add_float("Edge width", first_patch.get_linewidth(), lambda v: editor._set_bar_linewidth(artist, v), 0.0, 20.0, 0.25)
+        edge_width_widget = None
+
+        def set_border(enabled: bool) -> None:
+            width = float(edge_width_widget.value()) if edge_width_widget is not None else float(first_patch.get_linewidth())
+            editor._set_bar_linewidth(artist, max(width, 1.0) if enabled else 0.0)
+
+        border = editor._add_bool("Border", first_patch.get_linewidth() > 0, set_border)
+        edge_color = editor._add_color("Edge color", first_patch.get_edgecolor(), lambda v: editor._set_bar_edgecolor(artist, v))
+        edge_width_widget = editor._add_float("Edge width", first_patch.get_linewidth(), lambda v: editor._set_bar_linewidth(artist, v), 0.0, 20.0, 0.25)
+        border.toggled.connect(lambda checked: editor._set_controls_enabled([edge_color, edge_width_widget], checked))
+        editor._set_controls_enabled([edge_color, edge_width_widget], border.isChecked())
         editor._add_float("Alpha", first_patch.get_alpha() if first_patch.get_alpha() is not None else 1.0, lambda v: editor._set_bar_alpha(artist, v), 0.0, 1.0, 0.05)
         editor._add_choice("Hatch", first_patch.get_hatch() or "None", ["None", "/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"], lambda v: editor._set_bar_hatch(artist, "" if v == "None" else v))
         editor._add_float("Bar width", abs(first_patch.get_width()), lambda v: editor._set_bar_width(artist, v), 0.01, 10.0, 0.05, decimals=3)

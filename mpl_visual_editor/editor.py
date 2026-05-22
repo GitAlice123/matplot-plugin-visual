@@ -17,6 +17,7 @@ matplotlib.use("QtAgg")
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
+from matplotlib.markers import MarkerStyle
 from PySide6.QtCore import QPointF, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
@@ -121,6 +122,11 @@ def _insert_shape_icon(tool: str, size: int = 28) -> QIcon:
 def _draw_icon_arrow_head(painter: QPainter, tip: QPointF, side_a: QPointF, side_b: QPointF) -> None:
     painter.drawLine(tip, side_a)
     painter.drawLine(tip, side_b)
+
+
+def _marker_path(marker: str) -> Any:
+    marker_style = MarkerStyle(marker)
+    return marker_style.get_path().transformed(marker_style.get_transform())
 
 
 class _AspectCanvasHost(QWidget):
@@ -667,6 +673,9 @@ class StyleEditor(QMainWindow):
         if self._drag_ref is not None:
             self._drag_editor_artist(event)
             return
+        if self._legend_press_xy is not None and self.current_ref is not None and self.current_ref.kind == "legend":
+            QTimer.singleShot(0, self._refresh_hover_highlight)
+            return
         if self.pinned_ref is not None:
             return
 
@@ -765,6 +774,7 @@ class StyleEditor(QMainWindow):
         if moved > 4:
             self._legend_position_dirty = True
             self._mark_position_dirty()
+            self._refresh_hover_highlight()
             self.canvas.draw_idle()
             self.status.setText("Legend moved. Click Save to keep it.")
 
@@ -1021,6 +1031,8 @@ class StyleEditor(QMainWindow):
         if ref is None or ref.kind not in {"shape", "textbox", "text", "line", "arrow"}:
             return
         ax = ref.artist.axes
+        if ax is None:
+            return
         if ref.kind == "shape":
             points = self._shape_handle_points(shape_props(ref.artist))
         elif ref.kind == "textbox":
@@ -1157,7 +1169,14 @@ class StyleEditor(QMainWindow):
             return None
 
         for ref in reversed(self.refs):
-            if ref.kind in {"figure", "axes", "axis", "text_group"}:
+            if ref.kind not in {"text", "textbox"}:
+                continue
+            adapter = get_adapter(ref.kind)
+            if adapter is not None and adapter.hit_test(ref, event, self):
+                return ref
+
+        for ref in reversed(self.refs):
+            if ref.kind in {"figure", "axes", "axis", "text", "textbox", "text_group"}:
                 continue
             adapter = get_adapter(ref.kind)
             if adapter is not None and adapter.hit_test(ref, event, self):
@@ -1196,6 +1215,14 @@ class StyleEditor(QMainWindow):
         if redraw:
             self.canvas.draw_idle()
 
+    def _refresh_hover_highlight(self) -> None:
+        if self.hover_ref is None or self._highlight_state is None:
+            return
+        ref = self.hover_ref
+        self._restore_hover_highlight(ref, self._highlight_state)
+        self._highlight_state = self._apply_hover_highlight(ref)
+        self.canvas.draw_idle()
+
     def _apply_hover_highlight(self, ref: ArtistRef) -> dict[str, Any]:
         adapter = get_adapter(ref.kind)
         if adapter is not None:
@@ -1228,12 +1255,13 @@ class StyleEditor(QMainWindow):
 
         self._building_form = False
 
-    def _add_text(self, label: str, value: str, setter: Callable[[str], Any]) -> None:
+    def _add_text(self, label: str, value: str, setter: Callable[[str], Any]) -> QLineEdit:
         widget = QLineEdit(str(value))
         widget._mve_commit = lambda: setter(widget.text())
         save_button = self._add_property_row(label, widget)
         widget.textEdited.connect(lambda _text: self._mark_pending_dirty(save_button))
         widget.editingFinished.connect(lambda: self._apply(lambda: setter(widget.text()), save_button))
+        return widget
 
     def _add_float(
         self,
@@ -1246,7 +1274,7 @@ class StyleEditor(QMainWindow):
         live: bool = True,
         decimals: int = 2,
         keyboard_tracking: bool = False,
-    ) -> None:
+    ) -> QDoubleSpinBox:
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setSingleStep(step)
@@ -1259,14 +1287,16 @@ class StyleEditor(QMainWindow):
             widget.valueChanged.connect(lambda new_value: self._apply(lambda: setter(float(new_value)), save_button))
         else:
             widget.editingFinished.connect(lambda: self._apply(lambda: setter(float(widget.value())), save_button))
+        return widget
 
-    def _add_bool(self, label: str, value: bool, setter: Callable[[bool], Any]) -> None:
+    def _add_bool(self, label: str, value: bool, setter: Callable[[bool], Any]) -> QCheckBox:
         widget = QCheckBox()
         widget.setChecked(bool(value))
         save_button = self._add_property_row(label, widget)
         widget.toggled.connect(lambda checked: self._apply(lambda: setter(bool(checked)), save_button))
+        return widget
 
-    def _add_choice(self, label: str, value: Any, choices: list[str], setter: Callable[[str], Any]) -> None:
+    def _add_choice(self, label: str, value: Any, choices: list[str], setter: Callable[[str], Any]) -> QComboBox:
         widget = QComboBox()
         widget.addItems(choices)
         text_value = str(value)
@@ -1277,11 +1307,13 @@ class StyleEditor(QMainWindow):
             widget.setCurrentIndex(index)
         save_button = self._add_property_row(label, widget)
         widget.currentTextChanged.connect(lambda text: self._apply(lambda: setter(text), save_button))
+        return widget
 
-    def _add_color(self, label: str, value: Any, setter: Callable[[str], Any]) -> None:
+    def _add_color(self, label: str, value: Any, setter: Callable[[str], Any]) -> QPushButton:
         button = QPushButton(str(value))
         save_button = self._add_property_row(label, button)
         button.clicked.connect(lambda: self._pick_color(button, setter, save_button))
+        return button
 
     def _add_button(self, label: str, callback: Callable[[], Any]) -> None:
         button = QPushButton(label)
@@ -1326,6 +1358,10 @@ class StyleEditor(QMainWindow):
         value = color.name()
         button.setText(value)
         self._apply(lambda: setter(value), save_button)
+
+    def _set_controls_enabled(self, widgets: list[QWidget], enabled: bool) -> None:
+        for widget in widgets:
+            widget.setEnabled(bool(enabled))
 
     def _rebuild_current_legend(self, **changes: Any) -> None:
         if self._rebuilding_legend:
@@ -1686,6 +1722,7 @@ class StyleEditor(QMainWindow):
             frame_alpha = frame.get_alpha()
             facecolor = frame.get_facecolor()
             edgecolor = frame.get_edgecolor()
+            frame_linewidth = frame.get_linewidth()
             draggable = legend.get_draggable() is not None
 
             try:
@@ -1699,6 +1736,7 @@ class StyleEditor(QMainWindow):
             new_frame.set_alpha(frame_alpha)
             new_frame.set_facecolor(facecolor)
             new_frame.set_edgecolor(edgecolor)
+            new_frame.set_linewidth(frame_linewidth)
             if "bbox_to_anchor" in props:
                 new_legend._mve_bbox_to_anchor = props["bbox_to_anchor"]
                 new_legend._mve_loc = props["loc"]
@@ -1822,6 +1860,9 @@ class StyleEditor(QMainWindow):
             ("get_linestyle", "set_linestyle"),
             ("get_marker", "set_marker"),
             ("get_markersize", "set_markersize"),
+            ("get_markerfacecolor", "set_markerfacecolor"),
+            ("get_markeredgecolor", "set_markeredgecolor"),
+            ("get_markeredgewidth", "set_markeredgewidth"),
             ("get_alpha", "set_alpha"),
         ]:
             if hasattr(line, getter_name) and hasattr(handle, setter_name):
@@ -1891,8 +1932,11 @@ class StyleEditor(QMainWindow):
         linewidth = float(linewidths[0]) if len(linewidths) else None
         size = float(sizes[0]) if len(sizes) else None
         alpha = scatter.get_alpha() if hasattr(scatter, "get_alpha") else None
+        paths = scatter.get_paths() if hasattr(scatter, "get_paths") else []
 
         if hasattr(handle, "set_markerfacecolor"):
+            if paths and hasattr(handle, "set_marker"):
+                handle.set_marker(self._scatter_marker_name(scatter))
             if facecolor is not None:
                 handle.set_markerfacecolor(facecolor)
             if edgecolor is not None and hasattr(handle, "set_markeredgecolor"):
@@ -1904,6 +1948,9 @@ class StyleEditor(QMainWindow):
             if alpha is not None and hasattr(handle, "set_alpha"):
                 handle.set_alpha(alpha)
             return
+
+        if paths and hasattr(handle, "set_paths"):
+            handle.set_paths(paths)
 
         for getter_name, setter_name in [
             ("get_facecolors", "set_facecolor"),
@@ -1928,6 +1975,17 @@ class StyleEditor(QMainWindow):
                     continue
                 value = [float(value[0])]
             getattr(handle, setter_name)(value)
+
+    def _scatter_marker_name(self, scatter: Any) -> str:
+        paths = scatter.get_paths() if hasattr(scatter, "get_paths") else []
+        if not paths:
+            return "o"
+        path = paths[0]
+        for marker in ["o", "s", "^", "v", "D", "x", "+", "*", ".", "P", "X"]:
+            marker_path = _marker_path(marker)
+            if path.vertices.shape == marker_path.vertices.shape and (path.vertices == marker_path.vertices).all():
+                return marker
+        return "o"
 
     def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
@@ -2095,15 +2153,48 @@ class StyleEditor(QMainWindow):
                 artist.set_data(props["xdata"], props["ydata"])
                 artist._mve_xdata = list(props["xdata"])
                 artist._mve_ydata = list(props["ydata"])
+            artist.set_visible(props.get("visible", True))
             artist.set_color(props["color"])
             artist.set_linewidth(props["linewidth"])
             artist.set_linestyle(props["linestyle"])
+            artist.set_drawstyle(props.get("drawstyle", "default"))
             artist.set_marker(props["marker"])
             artist.set_markersize(props["markersize"])
+            artist.set_markerfacecolor(props.get("markerfacecolor", props["color"]))
+            artist.set_markeredgecolor(props.get("markeredgecolor", props["color"]))
+            artist.set_markeredgewidth(props.get("markeredgewidth", 1.0))
             artist.set_alpha(props["alpha"])
             artist.set_label(props["label"])
+        elif kind == "scatter":
+            artist.set_visible(props["visible"])
+            artist.set_label(props["label"])
+            artist.set_paths([_marker_path(props.get("marker", "o"))])
+            artist.set_facecolor(props["facecolor"])
+            artist.set_edgecolor(props["edgecolor"])
+            artist.set_linewidth(props["linewidth"])
+            artist.set_sizes([props["size"]] * max(1, len(artist.get_offsets())))
+            artist.set_alpha(props["alpha"])
         elif kind == "bar":
             self._restore_bar_snapshot(artist, props)
+        elif kind == "wedge":
+            artist.set_visible(props["visible"])
+            artist.set_facecolor(props["facecolor"])
+            artist.set_edgecolor(props["edgecolor"])
+            artist.set_linewidth(props["linewidth"])
+            artist.set_alpha(props["alpha"])
+            artist.set_hatch(props.get("hatch", ""))
+            artist.set_center(tuple(props["center"]))
+            artist.set_radius(props["radius"])
+            artist.set_width(props.get("width"))
+            artist.set_theta1(props["theta1"])
+            artist.set_theta2(props["theta2"])
+        elif kind == "patch":
+            artist.set_visible(props["visible"])
+            artist.set_facecolor(props["facecolor"])
+            artist.set_edgecolor(props["edgecolor"])
+            artist.set_linewidth(props["linewidth"])
+            artist.set_alpha(props["alpha"])
+            artist.set_hatch(props.get("hatch", ""))
         elif kind == "shape":
             apply_shape_props(artist.axes, props, artist)
         elif kind == "textbox":
@@ -2192,6 +2283,7 @@ class StyleEditor(QMainWindow):
                 frame.set_alpha(props["frame_alpha"])
                 frame.set_facecolor(props["facecolor"])
                 frame.set_edgecolor(props["edgecolor"])
+                frame.set_linewidth(props.get("frame_linewidth", 1.0))
         finally:
             self._suppress_dirty = False
 

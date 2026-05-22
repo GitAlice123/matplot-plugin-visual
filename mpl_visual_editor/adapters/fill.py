@@ -49,8 +49,17 @@ class FillAdapter(BaseAdapter):
             editor._add_float("Width", props["width"], lambda v: self._set_fill(artist, width=v), 1e-12, 1e12, 0.1, decimals=4)
             editor._add_float("Height", props["height"], lambda v: self._set_fill(artist, height=v), 1e-12, 1e12, 0.1, decimals=4)
         editor._add_color("Fill color", props["facecolor"], lambda v: self._set_fill(artist, facecolor=v))
-        editor._add_color("Edge color", props["edgecolor"], lambda v: self._set_fill(artist, edgecolor=v))
-        editor._add_float("Edge width", props["linewidth"], lambda v: self._set_fill(artist, linewidth=v), 0.0, 50.0, 0.25)
+        edge_width_widget = None
+
+        def set_border(enabled: bool) -> None:
+            width = float(edge_width_widget.value()) if edge_width_widget is not None else float(props["linewidth"])
+            self._set_fill(artist, linewidth=max(width, 1.0) if enabled else 0.0)
+
+        border = editor._add_bool("Border", float(props["linewidth"]) > 0, set_border)
+        edge_color = editor._add_color("Edge color", props["edgecolor"], lambda v: self._set_fill(artist, edgecolor=v))
+        edge_width_widget = editor._add_float("Edge width", props["linewidth"], lambda v: self._set_fill(artist, linewidth=v), 0.0, 50.0, 0.25)
+        border.toggled.connect(lambda checked: editor._set_controls_enabled([edge_color, edge_width_widget], checked))
+        editor._set_controls_enabled([edge_color, edge_width_widget], border.isChecked())
         editor._add_float("Alpha", props["alpha"] if props["alpha"] is not None else 0.18, lambda v: self._set_fill(artist, alpha=v), 0.0, 1.0, 0.05)
         return True
 

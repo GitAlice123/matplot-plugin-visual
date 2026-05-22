@@ -47,8 +47,10 @@ class SpineAdapter(BaseAdapter):
 
     def build_form(self, ref: ArtistRef, editor: Any) -> bool:
         artist = ref.artist
-        editor._add_bool("Visible", artist.get_visible(), artist.set_visible)
-        editor._add_color("Color", artist.get_edgecolor(), artist.set_edgecolor)
-        editor._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
+        border = editor._add_bool("Border", artist.get_visible(), artist.set_visible)
+        color = editor._add_color("Color", artist.get_edgecolor(), artist.set_edgecolor)
+        linewidth = editor._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
+        border.toggled.connect(lambda checked: editor._set_controls_enabled([color, linewidth], checked))
+        editor._set_controls_enabled([color, linewidth], border.isChecked())
         return True
 
