@@ -86,8 +86,9 @@ class AxisAdapter(BaseAdapter):
         if not editor._is_categorical_axis(artist, axis_name):
             scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
             editor._add_choice("Scale", scale, ["linear", "log"], lambda v: editor._set_axis_scale(artist, axis_name, v))
-            editor._add_float("Tick start", editor._axis_tick_start(artist), lambda v: editor._apply_axis_ticks(artist, axis_name, v, editor._axis_tick_interval(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
-            editor._add_float("Tick interval", editor._axis_tick_interval(artist), lambda v: editor._apply_axis_ticks(artist, axis_name, editor._axis_tick_start(artist), v), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
+            editor._add_float("Tick start", editor._axis_tick_start(artist), lambda v: editor._apply_axis_ticks(artist, axis_name, v, editor._axis_tick_interval(artist), editor._axis_tick_end(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
+            editor._add_float("Tick end", editor._axis_tick_end(artist), lambda v: editor._apply_axis_ticks(artist, axis_name, editor._axis_tick_start(artist), editor._axis_tick_interval(artist), v), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
+            editor._add_float("Tick interval", editor._axis_tick_interval(artist), lambda v: editor._apply_axis_ticks(artist, axis_name, editor._axis_tick_start(artist), v, editor._axis_tick_end(artist)), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
         editor._add_float("Tick label size", editor._axis_tick_label_prop(artist, "fontsize", 10.0), lambda v: editor._apply_axis_tick_labels(artist, fontsize=v), 1.0, 96.0, 1.0)
         editor._add_color("Tick label color", editor._axis_tick_label_prop(artist, "color", "#000000"), lambda v: editor._apply_axis_tick_labels(artist, color=v))
         editor._add_choice("Tick label weight", editor._axis_tick_label_prop(artist, "fontweight", "normal"), ["normal", "bold", "light", "semibold", "heavy"], lambda v: editor._apply_axis_tick_labels(artist, weight=v))

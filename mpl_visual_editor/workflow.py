@@ -160,8 +160,60 @@ def apply_style_patch(
     if not callable(apply_style):
         raise RuntimeError(f"{path} does not define apply_style(fig)")
     _sanitize_legacy_axis_patches(module)
+    _patch_style_module_helpers(module)
     apply_style(fig)
     return True
+
+
+def _patch_style_module_helpers(module: Any) -> None:
+    try:
+        from .exporter import _legend_handles_from_specs
+    except Exception:
+        return
+    _repair_scatter_legend_handle_specs(module)
+    module._legend_handles_from_specs = _legend_handles_from_specs
+
+
+def _repair_scatter_legend_handle_specs(module: Any) -> None:
+    patches = getattr(module, "STYLE_PATCHES", None)
+    if not isinstance(patches, list):
+        return
+    scatter_props_by_label = {
+        patch.get("props", {}).get("label"): patch.get("props", {})
+        for patch in patches
+        if isinstance(patch, dict) and patch.get("kind") == "scatter"
+    }
+    for patch in patches:
+        if not isinstance(patch, dict) or patch.get("kind") != "legend":
+            continue
+        props = patch.get("props")
+        if not isinstance(props, dict):
+            continue
+        handle_specs = props.get("handle_specs")
+        if not isinstance(handle_specs, list):
+            continue
+        for spec in handle_specs:
+            if not isinstance(spec, dict) or spec.get("kind") != "line":
+                continue
+            marker = spec.get("marker")
+            label = spec.get("label")
+            scatter_props = scatter_props_by_label.get(label)
+            if marker in {None, "None", "none", ""} or not scatter_props:
+                continue
+            spec.clear()
+            spec.update(
+                {
+                    "kind": "scatter",
+                    "label": label,
+                    "facecolor": scatter_props.get("facecolor"),
+                    "edgecolor": scatter_props.get("edgecolor"),
+                    "linewidth": scatter_props.get("linewidth", 1.0),
+                    "size": scatter_props.get("size", 36.0),
+                    "alpha": scatter_props.get("alpha"),
+                    "marker": marker,
+                    "path": None,
+                }
+            )
 
 
 def _style_stem(*, name: str | None, source_path: str | Path | None) -> str:

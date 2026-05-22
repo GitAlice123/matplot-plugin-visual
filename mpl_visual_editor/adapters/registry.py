@@ -13,6 +13,7 @@ from .base import ArtistAdapter
 from .figure import FigureAdapter
 from .legend import LegendAdapter
 from .line import LineAdapter
+from .scatter import ScatterAdapter
 from .spine import SpineAdapter
 from .text import TextAdapter
 from .unsupported import UnsupportedAdapter
@@ -24,6 +25,7 @@ _ADAPTERS: list[ArtistAdapter] = [
     TextAdapter(),
     AxisAdapter(),
     LineAdapter(),
+    ScatterAdapter(),
     BarAdapter(),
     LegendAdapter(),
     SpineAdapter(),

@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any
 import math
 
+from matplotlib.collections import PathCollection
 from matplotlib.colors import to_hex
+from matplotlib.markers import MarkerStyle
+import numpy as np
 
 
 def snapshot_artist(
@@ -47,6 +50,16 @@ def snapshot_artist(
             "alpha": artist.get_alpha(),
             "label": artist.get_label(),
         }
+    elif kind == "scatter":
+        props = {
+            "visible": bool(artist.get_visible()),
+            "label": artist.get_label(),
+            "facecolor": _first_color(artist.get_facecolors()),
+            "edgecolor": _first_color(artist.get_edgecolors()),
+            "linewidth": _first_float(artist.get_linewidths(), 1.0),
+            "size": _first_float(artist.get_sizes(), 36.0),
+            "alpha": artist.get_alpha(),
+        }
     elif kind == "bar":
         patches = list(artist.patches)
         props = {
@@ -83,7 +96,11 @@ def snapshot_artist(
         ax = artist.axes
         scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
         scale_explicit = hasattr(artist, "_mve_scale")
-        ticks_explicit = hasattr(artist, "_mve_tick_start") or hasattr(artist, "_mve_tick_interval")
+        ticks_explicit = (
+            hasattr(artist, "_mve_tick_start")
+            or hasattr(artist, "_mve_tick_end")
+            or hasattr(artist, "_mve_tick_interval")
+        )
         labels_explicit = any(
             hasattr(artist, attr)
             for attr in [
@@ -103,6 +120,7 @@ def snapshot_artist(
                 {
                     "ticks_explicit": bool(ticks_explicit),
                     "tick_start": _axis_tick_start(artist),
+                    "tick_end": _axis_tick_end(artist),
                     "tick_interval": _axis_tick_interval(artist),
                 }
             )
@@ -183,7 +201,23 @@ def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
     specs: list[dict[str, Any]] = []
     for index, handle in enumerate(handles):
         label = labels[index] if index < len(labels) else getattr(handle, "get_label", lambda: "")()
-        if hasattr(handle, "get_facecolor") and hasattr(handle, "get_hatch"):
+        if isinstance(handle, PathCollection):
+            paths = handle.get_paths()
+            path = paths[0] if paths else None
+            specs.append(
+                {
+                    "kind": "scatter",
+                    "label": label,
+                    "facecolor": _first_color(handle.get_facecolors()),
+                    "edgecolor": _first_color(handle.get_edgecolors()),
+                    "linewidth": _first_float(handle.get_linewidths(), 1.0),
+                    "size": _first_float(handle.get_sizes(), 36.0),
+                    "alpha": handle.get_alpha(),
+                    "marker": _marker_name(path),
+                    "path": _path_spec(path),
+                }
+            )
+        elif hasattr(handle, "get_facecolor") and hasattr(handle, "get_hatch"):
             specs.append(
                 {
                     "kind": "patch",
@@ -195,6 +229,8 @@ def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
                     "alpha": handle.get_alpha(),
                 }
             )
+        elif self_marker := _line_marker_spec(handle, label):
+            specs.append(self_marker)
         elif hasattr(handle, "get_color") and hasattr(handle, "get_linestyle"):
             specs.append(
                 {
@@ -209,6 +245,58 @@ def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
                 }
             )
     return specs
+
+
+def _line_marker_spec(handle: Any, label: str) -> dict[str, Any] | None:
+    if not (hasattr(handle, "get_marker") and hasattr(handle, "get_linestyle")):
+        return None
+    marker = handle.get_marker()
+    linestyle = str(handle.get_linestyle())
+    if marker in {None, "None", "none", ""} or linestyle not in {"None", "none", " "}:
+        return None
+    markersize = float(handle.get_markersize()) if hasattr(handle, "get_markersize") else 6.0
+    return {
+        "kind": "scatter",
+        "label": label,
+        "facecolor": _color(handle.get_markerfacecolor()) if hasattr(handle, "get_markerfacecolor") else None,
+        "edgecolor": _color(handle.get_markeredgecolor()) if hasattr(handle, "get_markeredgecolor") else None,
+        "linewidth": float(handle.get_markeredgewidth()) if hasattr(handle, "get_markeredgewidth") else 1.0,
+        "size": markersize * markersize,
+        "alpha": handle.get_alpha() if hasattr(handle, "get_alpha") else None,
+        "marker": marker,
+        "path": None,
+    }
+
+
+def _path_spec(path: Any) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    vertices = path.vertices.tolist() if hasattr(path.vertices, "tolist") else list(path.vertices)
+    codes = path.codes.tolist() if getattr(path, "codes", None) is not None else None
+    return {"vertices": vertices, "codes": codes}
+
+
+def _marker_name(path: Any) -> str | None:
+    if path is None:
+        return None
+    for marker in ["x", "o", "s", "^", "v", "D", "+", "*", ".", "P", "X"]:
+        marker_style = MarkerStyle(marker)
+        marker_path = marker_style.get_path().transformed(marker_style.get_transform())
+        if _paths_match(path, marker_path):
+            return marker
+    return None
+
+
+def _paths_match(left: Any, right: Any) -> bool:
+    left_codes = getattr(left, "codes", None)
+    right_codes = getattr(right, "codes", None)
+    if left_codes is None and right_codes is not None:
+        return False
+    if left_codes is not None and right_codes is None:
+        return False
+    if left_codes is not None and not np.array_equal(left_codes, right_codes):
+        return False
+    return np.allclose(left.vertices, right.vertices, rtol=1e-6, atol=1e-8)
 
 
 def _axis_tick_start(axis: Any) -> float:
@@ -230,6 +318,16 @@ def _axis_tick_interval(axis: Any) -> float:
         if interval > 0:
             return float(interval)
     return 1.0
+
+
+def _axis_tick_end(axis: Any) -> float:
+    if hasattr(axis, "_mve_tick_end"):
+        return float(axis._mve_tick_end)
+    ticks = _finite_ticks(axis)
+    if ticks:
+        return float(ticks[-1])
+    _low, high = axis.get_view_interval()
+    return float(high)
 
 
 def _finite_ticks(axis: Any) -> list[float]:
@@ -270,3 +368,15 @@ def _color(value: Any) -> str | None:
         return to_hex(value, keep_alpha=False)
     except ValueError:
         return str(value)
+
+
+def _first_color(values: Any) -> str:
+    if values is None or len(values) == 0:
+        return "#000000"
+    return _color(values[0]) or "#000000"
+
+
+def _first_float(values: Any, default: float) -> float:
+    if values is None or len(values) == 0:
+        return float(default)
+    return float(values[0])

@@ -167,9 +167,61 @@ def _apply_existing_style_patch(fig: Figure, patch_path: str | Path) -> str | No
     if not callable(apply_style):
         raise RuntimeError(f"{patch_path} does not define apply_style(fig)")
     _sanitize_legacy_axis_patches(module)
+    _patch_style_module_helpers(module)
     apply_style(fig)
     source = getattr(module, "MPL_VISUAL_EDITOR_SOURCE", None)
     return str(source) if source is not None else None
+
+
+def _patch_style_module_helpers(module: Any) -> None:
+    try:
+        from .exporter import _legend_handles_from_specs
+    except Exception:
+        return
+    _repair_scatter_legend_handle_specs(module)
+    module._legend_handles_from_specs = _legend_handles_from_specs
+
+
+def _repair_scatter_legend_handle_specs(module: Any) -> None:
+    patches = getattr(module, "STYLE_PATCHES", None)
+    if not isinstance(patches, list):
+        return
+    scatter_props_by_label = {
+        patch.get("props", {}).get("label"): patch.get("props", {})
+        for patch in patches
+        if isinstance(patch, dict) and patch.get("kind") == "scatter"
+    }
+    for patch in patches:
+        if not isinstance(patch, dict) or patch.get("kind") != "legend":
+            continue
+        props = patch.get("props")
+        if not isinstance(props, dict):
+            continue
+        handle_specs = props.get("handle_specs")
+        if not isinstance(handle_specs, list):
+            continue
+        for spec in handle_specs:
+            if not isinstance(spec, dict) or spec.get("kind") != "line":
+                continue
+            marker = spec.get("marker")
+            label = spec.get("label")
+            scatter_props = scatter_props_by_label.get(label)
+            if marker in {None, "None", "none", ""} or not scatter_props:
+                continue
+            spec.clear()
+            spec.update(
+                {
+                    "kind": "scatter",
+                    "label": label,
+                    "facecolor": scatter_props.get("facecolor"),
+                    "edgecolor": scatter_props.get("edgecolor"),
+                    "linewidth": scatter_props.get("linewidth", 1.0),
+                    "size": scatter_props.get("size", 36.0),
+                    "alpha": scatter_props.get("alpha"),
+                    "marker": marker,
+                    "path": None,
+                }
+            )
 
 
 def _sanitize_legacy_axis_patches(module: Any) -> None:
@@ -457,12 +509,17 @@ class StyleEditor(QMainWindow):
         if moved > 4:
             self._legend_position_dirty = True
             self._mark_position_dirty()
+            self.canvas.draw_idle()
             self.status.setText("Legend moved. Click Save to keep it.")
 
     def _on_canvas_leave(self, _event: Any) -> None:
         if self.pinned_ref is not None:
             return
         self._clear_hover_highlight()
+
+    def closeEvent(self, event: Any) -> None:
+        self._clear_hover_highlight(redraw=False)
+        super().closeEvent(event)
 
     def _find_ref_at_event(self, event: Any) -> ArtistRef | None:
         if event.x is None or event.y is None:
@@ -696,6 +753,9 @@ class StyleEditor(QMainWindow):
         scale = fit_scale if self._preview_zoom is None else self._preview_zoom
         target_width = max(1, int(round(natural_width * scale)))
         target_height = max(1, int(round(natural_height * scale)))
+        target_dpi = max(1.0, PREVIEW_DPI * scale)
+        if not math.isclose(float(self.fig.dpi), target_dpi, rel_tol=0.001, abs_tol=0.001):
+            self.fig.set_dpi(target_dpi)
         if self.canvas.width() != target_width or self.canvas.height() != target_height:
             self.canvas.setFixedSize(target_width, target_height)
             self.canvas_host.setMinimumSize(target_width + 48, target_height + 48)
@@ -705,25 +765,37 @@ class StyleEditor(QMainWindow):
         current_scale = self._current_preview_scale()
         self._preview_zoom = min(8.0, max(0.1, current_scale * float(factor)))
         self._update_canvas_display_size()
+        self.canvas.draw_idle()
 
     def _fit_preview(self) -> None:
         self._preview_zoom = None
         self._update_canvas_display_size()
+        self.canvas.draw_idle()
 
     def _actual_size_preview(self) -> None:
         self._preview_zoom = 1.0
         self._update_canvas_display_size()
+        self.canvas.draw_idle()
 
     def _current_preview_scale(self) -> float:
-        design_width, _design_height = self._figure_size()
-        natural_width = max(1.0, design_width * PREVIEW_DPI)
-        return max(0.1, self.canvas.width() / natural_width)
+        return max(0.1, float(self.fig.dpi) / PREVIEW_DPI)
 
     def _update_preview_zoom_label(self, scale: float) -> None:
         if not hasattr(self, "preview_zoom_label"):
             return
         suffix = " (Fit)" if self._preview_zoom is None else ""
         self.preview_zoom_label.setText(f"{scale * 100:.0f}%{suffix}")
+
+    def _preview_fit_scale(self) -> float:
+        design_width, design_height = self._figure_size()
+        if design_width <= 0 or design_height <= 0:
+            return 1.0
+        viewport = self.canvas_scroll.viewport() if hasattr(self, "canvas_scroll") else self.canvas_host
+        host_width = max(1, viewport.width() - 48)
+        host_height = max(1, viewport.height() - 48)
+        natural_width = max(1.0, design_width * PREVIEW_DPI)
+        natural_height = max(1.0, design_height * PREVIEW_DPI)
+        return min(host_width / natural_width, host_height / natural_height)
 
     def _set_axis_scale(self, axis: Any, axis_name: str, scale: str) -> None:
         ax = axis.axes
@@ -732,7 +804,7 @@ class StyleEditor(QMainWindow):
         else:
             ax.set_yscale(scale)
         axis._mve_scale = scale
-        self._apply_axis_ticks(axis, axis_name, self._axis_tick_start(axis), self._axis_tick_interval(axis))
+        self._apply_axis_ticks(axis, axis_name, self._axis_tick_start(axis), self._axis_tick_interval(axis), self._axis_tick_end(axis))
 
     def _is_categorical_axis(self, axis: Any, axis_name: str) -> bool:
         ax = axis.axes
@@ -812,21 +884,29 @@ class StyleEditor(QMainWindow):
         for text in texts:
             text.set_fontstyle(style)
 
-    def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float) -> None:
+    def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float, end: float | None = None) -> None:
         interval = float(interval)
         start = float(start)
-        if interval <= 0 or not math.isfinite(interval) or not math.isfinite(start):
+        if end is not None:
+            end = float(end)
+        if (
+            interval <= 0
+            or not math.isfinite(interval)
+            or not math.isfinite(start)
+            or (end is not None and not math.isfinite(end))
+        ):
             return
         ax = axis.axes
-        low, high = ax.get_xlim() if axis_name == "x" else ax.get_ylim()
-        inverted = high < low
-        if high < low:
-            low, high = high, low
+        current_low, current_high = ax.get_xlim() if axis_name == "x" else ax.get_ylim()
+        inverted = current_high < current_low
+        low, high = (current_high, current_low) if inverted else (current_low, current_high)
 
         max_ticks = 1000
         ticks: list[float] = []
         value = start
         low = value
+        if end is not None:
+            high = max(start, end)
         if high <= low:
             high = low + interval
         limit = high + interval * 0.5
@@ -845,6 +925,7 @@ class StyleEditor(QMainWindow):
             ax.set_yticks(ticks)
             ax.set_ylim((high, low) if inverted else (low, high))
         axis._mve_tick_start = start
+        axis._mve_tick_end = high
         axis._mve_tick_interval = interval
         self._reapply_axis_tick_label_style(axis)
 
@@ -898,6 +979,15 @@ class StyleEditor(QMainWindow):
             if interval > 0:
                 return float(interval)
         return 1.0
+
+    def _axis_tick_end(self, axis: Any) -> float:
+        if hasattr(axis, "_mve_tick_end"):
+            return float(axis._mve_tick_end)
+        ticks = self._finite_axis_ticks(axis)
+        if ticks:
+            return float(ticks[-1])
+        _low, high = axis.get_view_interval()
+        return float(high)
 
     def _axis_tick_label_prop(self, axis: Any, prop: str, default: Any) -> Any:
         attr = f"_mve_tick_label_{prop}"
@@ -967,6 +1057,10 @@ class StyleEditor(QMainWindow):
             edgecolor = frame.get_edgecolor()
             draggable = legend.get_draggable() is not None
 
+            try:
+                legend.remove()
+            except Exception:
+                pass
             new_legend = ax.legend(**props)
             new_legend.set_visible(visible)
             new_legend.set_draggable(draggable, use_blit=False, update="bbox")
@@ -1058,15 +1152,17 @@ class StyleEditor(QMainWindow):
     def _apply(self, callback: Callable[[], Any], save_button: QPushButton | None = None) -> None:
         if self._building_form:
             return
+        view_state = self._capture_preview_view()
         self._active_save_button = save_button
         try:
             callback()
             self._sync_current_line_legend_handle()
             self._sync_current_bar_legend_handle()
+            self._sync_current_scatter_legend_handle()
             self._mark_dirty(save_button)
         finally:
             self._active_save_button = None
-        self._redraw("Updated")
+        self._redraw("Updated", view_state=view_state)
 
     def _sync_current_line_legend_handle(self) -> None:
         if self.current_ref is None or self.current_ref.kind != "line":
@@ -1133,6 +1229,74 @@ class StyleEditor(QMainWindow):
         ]:
             if hasattr(patch, getter_name) and hasattr(handle, setter_name):
                 getattr(handle, setter_name)(getattr(patch, getter_name)())
+
+    def _sync_current_scatter_legend_handle(self) -> None:
+        if self.current_ref is None or self.current_ref.kind != "scatter":
+            return
+        scatter = self.current_ref.artist
+        ax = scatter.axes
+        legend = ax.get_legend()
+        if legend is None:
+            return
+
+        handles = getattr(legend, "legend_handles", None)
+        if handles is None:
+            handles = getattr(legend, "legendHandles", [])
+        legend_texts = [text.get_text() for text in legend.get_texts()]
+        label = scatter.get_label()
+        try:
+            handle = list(handles)[legend_texts.index(label)]
+        except (ValueError, IndexError, TypeError):
+            return
+        self._copy_scatter_style_to_legend_handle(scatter, handle)
+
+    def _copy_scatter_style_to_legend_handle(self, scatter: Any, handle: Any) -> None:
+        facecolors = scatter.get_facecolors() if hasattr(scatter, "get_facecolors") else []
+        edgecolors = scatter.get_edgecolors() if hasattr(scatter, "get_edgecolors") else []
+        linewidths = scatter.get_linewidths() if hasattr(scatter, "get_linewidths") else []
+        sizes = scatter.get_sizes() if hasattr(scatter, "get_sizes") else []
+        facecolor = facecolors[0] if len(facecolors) else None
+        edgecolor = edgecolors[0] if len(edgecolors) else None
+        linewidth = float(linewidths[0]) if len(linewidths) else None
+        size = float(sizes[0]) if len(sizes) else None
+        alpha = scatter.get_alpha() if hasattr(scatter, "get_alpha") else None
+
+        if hasattr(handle, "set_markerfacecolor"):
+            if facecolor is not None:
+                handle.set_markerfacecolor(facecolor)
+            if edgecolor is not None and hasattr(handle, "set_markeredgecolor"):
+                handle.set_markeredgecolor(edgecolor)
+            if linewidth is not None and hasattr(handle, "set_markeredgewidth"):
+                handle.set_markeredgewidth(linewidth)
+            if size is not None and hasattr(handle, "set_markersize"):
+                handle.set_markersize(math.sqrt(size))
+            if alpha is not None and hasattr(handle, "set_alpha"):
+                handle.set_alpha(alpha)
+            return
+
+        for getter_name, setter_name in [
+            ("get_facecolors", "set_facecolor"),
+            ("get_edgecolors", "set_edgecolor"),
+            ("get_linewidths", "set_linewidth"),
+            ("get_sizes", "set_sizes"),
+            ("get_alpha", "set_alpha"),
+        ]:
+            if not hasattr(scatter, getter_name) or not hasattr(handle, setter_name):
+                continue
+            value = getattr(scatter, getter_name)()
+            if getter_name in {"get_facecolors", "get_edgecolors"}:
+                if value is None or len(value) == 0:
+                    continue
+                value = value[0]
+            elif getter_name == "get_linewidths":
+                if value is None or len(value) == 0:
+                    continue
+                value = float(value[0])
+            elif getter_name == "get_sizes":
+                if value is None or len(value) == 0:
+                    continue
+                value = [float(value[0])]
+            getattr(handle, setter_name)(value)
 
     def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
@@ -1307,7 +1471,7 @@ class StyleEditor(QMainWindow):
         elif kind == "axis":
             axis_name = props["axis"]
             self._set_axis_scale(artist, axis_name, props["scale"])
-            self._apply_axis_ticks(artist, axis_name, props["tick_start"], props["tick_interval"])
+            self._apply_axis_ticks(artist, axis_name, props["tick_start"], props["tick_interval"], props.get("tick_end"))
             self._apply_axis_tick_labels(
                 artist,
                 fontsize=props["tick_label_fontsize"],
@@ -1372,8 +1536,8 @@ class StyleEditor(QMainWindow):
         finally:
             self._suppress_dirty = False
 
-    def _redraw(self, message: str) -> None:
-        view_state = self._capture_preview_view()
+    def _redraw(self, message: str, view_state: dict[str, float] | None = None) -> None:
+        view_state = view_state or self._capture_preview_view()
         self._fit_figure_to_canvas(adjust_layout=True)
         self._restore_preview_view(view_state)
         self.canvas.draw_idle()
@@ -1385,16 +1549,24 @@ class StyleEditor(QMainWindow):
             return None
         hbar = self.canvas_scroll.horizontalScrollBar()
         vbar = self.canvas_scroll.verticalScrollBar()
+        scale = self._current_preview_scale()
+        fit_scale = self._preview_fit_scale()
+        is_fit = self._preview_zoom is None and math.isclose(scale, fit_scale, rel_tol=0.02, abs_tol=0.02)
         return {
             "h_value": float(hbar.value()),
             "v_value": float(vbar.value()),
             "h_ratio": self._scroll_ratio(hbar),
             "v_ratio": self._scroll_ratio(vbar),
+            "scale": scale,
+            "is_fit": float(is_fit),
         }
 
     def _restore_preview_view(self, state: dict[str, float] | None) -> None:
         if state is None or not hasattr(self, "canvas_scroll"):
             return
+        if not bool(state.get("is_fit", 0.0)):
+            self._preview_zoom = float(state["scale"])
+            self._update_canvas_display_size()
         hbar = self.canvas_scroll.horizontalScrollBar()
         vbar = self.canvas_scroll.verticalScrollBar()
         self._restore_scrollbar(hbar, state["h_value"], state["h_ratio"])

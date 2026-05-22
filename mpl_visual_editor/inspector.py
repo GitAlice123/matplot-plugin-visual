@@ -57,6 +57,8 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
         return ax.yaxis
     if target == "lines":
         return ax.lines[int(parts[3])]
+    if target == "collections":
+        return ax.collections[int(parts[3])]
     if target == "containers":
         return ax.containers[int(parts[3])]
     if target == "legend":
