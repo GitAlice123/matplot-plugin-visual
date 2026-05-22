@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import importlib.util
 import math
 import sys
 from pathlib import Path
@@ -55,22 +57,161 @@ class _AspectCanvasHost(QWidget):
         self.editor._update_canvas_display_size()
 
 
-def edit(fig: Figure, export_path: str | Path = "style_patch.py") -> None:
-    """Open a visual editor for an existing Matplotlib figure."""
+def edit(
+    fig: Figure,
+    export_path: str | Path | None = None,
+    apply_existing: bool = True,
+) -> None:
+    """Open a visual editor for an existing Matplotlib figure.
+
+    When ``apply_existing`` is true, an existing patch at ``export_path`` is
+    applied first. This makes the generated patch a reusable style layer: open
+    the same plot again, continue editing from the last exported result, then
+    overwrite the same patch.
+    """
+
+    patch_error = None
+    patch_warning = None
+    source_path = _infer_calling_script()
+    patch_path = Path(export_path) if export_path is not None else _default_export_path(source_path)
+    if apply_existing and patch_path.exists():
+        try:
+            patch_source = _apply_existing_style_patch(fig, patch_path)
+            if patch_source and source_path is not None:
+                expected_source = _source_metadata(source_path)
+                if _normalize_source_metadata(patch_source) != _normalize_source_metadata(expected_source):
+                    patch_warning = (
+                        f"{patch_path} was created from {patch_source!r}, "
+                        f"but this editor was opened from {expected_source!r}."
+                    )
+        except Exception as exc:
+            patch_error = exc
 
     app = QApplication.instance() or QApplication(sys.argv)
-    window = StyleEditor(fig, export_path)
+    window = StyleEditor(fig, patch_path, source_path=source_path)
+    if patch_warning is not None:
+        window.status.setText(f"Patch source mismatch: {patch_path}")
+        QMessageBox.warning(
+            window,
+            "Style patch source mismatch",
+            f"{patch_warning}\n\nThe patch was still applied. "
+            "Exporting will overwrite the current export path.",
+        )
+    if patch_error is not None:
+        window.status.setText(f"Could not apply existing patch: {patch_error}")
+        QMessageBox.warning(
+            window,
+            "Style patch not applied",
+            f"Could not apply existing patch:\n{patch_error}",
+        )
     window.show()
     app.exec()
+
+
+def _infer_calling_script() -> Path | None:
+    this_file = Path(__file__).resolve()
+    package_init = this_file.with_name("__init__.py")
+    for frame in inspect.stack()[1:]:
+        filename = frame.filename
+        if not filename or filename.startswith("<"):
+            continue
+        path = Path(filename).resolve()
+        if path in {this_file, package_init}:
+            continue
+        if path.exists():
+            return path
+    return None
+
+
+def _default_export_path(source_path: Path | None) -> Path:
+    if source_path is None:
+        return Path("style_patch.py")
+    return source_path.with_name(f"{source_path.stem}_style_patch.py")
+
+
+def _source_metadata(source_path: Path | None) -> str | None:
+    if source_path is None:
+        return None
+    try:
+        return source_path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return source_path.resolve().as_posix()
+
+
+def _normalize_source_metadata(value: str) -> str:
+    return value.replace("\\", "/").strip()
+
+
+def _apply_existing_style_patch(fig: Figure, patch_path: str | Path) -> str | None:
+    patch_path = Path(patch_path)
+    module_name = f"_mpl_visual_editor_style_patch_{abs(hash(patch_path.resolve()))}"
+    spec = importlib.util.spec_from_file_location(module_name, patch_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load {patch_path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        import numpy as np
+
+        module.np = np
+    except ImportError:
+        pass
+    spec.loader.exec_module(module)
+    apply_style = getattr(module, "apply_style", None)
+    if not callable(apply_style):
+        raise RuntimeError(f"{patch_path} does not define apply_style(fig)")
+    _sanitize_legacy_axis_patches(module)
+    apply_style(fig)
+    source = getattr(module, "MPL_VISUAL_EDITOR_SOURCE", None)
+    return str(source) if source is not None else None
+
+
+def _sanitize_legacy_axis_patches(module: Any) -> None:
+    patches = getattr(module, "STYLE_PATCHES", None)
+    if not isinstance(patches, list):
+        return
+    sanitized_patches = []
+    has_legacy_axis_ticks = False
+    has_legacy_axis_labels = False
+    for patch in patches:
+        if not isinstance(patch, dict) or patch.get("kind") != "axis":
+            sanitized_patches.append(patch)
+            continue
+        props = patch.get("props")
+        if not isinstance(props, dict):
+            sanitized_patches.append(patch)
+            continue
+        is_legacy_axis_patch = (
+            "ticks_explicit" not in props
+            and "tick_labels_explicit" not in props
+            and "scale_explicit" not in props
+        )
+        if is_legacy_axis_patch:
+            continue
+        sanitized_patches.append(patch)
+        if "ticks_explicit" not in props:
+            has_legacy_axis_ticks = True
+        if "tick_labels_explicit" not in props:
+            has_legacy_axis_labels = True
+    module.STYLE_PATCHES = sanitized_patches
+    if has_legacy_axis_ticks:
+        module._apply_axis_ticks = lambda *args, **kwargs: None
+    if has_legacy_axis_labels:
+        module._apply_axis_tick_labels = lambda *args, **kwargs: None
 
 
 class StyleEditor(QMainWindow):
     """Minimal style editor window."""
 
-    def __init__(self, fig: Figure, export_path: str | Path = "style_patch.py") -> None:
+    def __init__(
+        self,
+        fig: Figure,
+        export_path: str | Path = "style_patch.py",
+        source_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self.fig = fig
         self.export_path = Path(export_path)
+        self.source_path = source_path
         self.refs: list[ArtistRef] = iter_artist_refs(fig)
         self.current_ref: ArtistRef | None = None
         self.hover_ref: ArtistRef | None = None
@@ -123,13 +264,17 @@ class StyleEditor(QMainWindow):
         refresh_button.clicked.connect(self._refresh_refs)
         left_layout.addWidget(refresh_button)
 
-        export_button = QPushButton("Export style_patch.py")
+        export_button = QPushButton("Export style patch")
         export_button.clicked.connect(self._export)
         left_layout.addWidget(export_button)
 
         choose_export_button = QPushButton("Export as...")
         choose_export_button.clicked.connect(self._export_as)
         left_layout.addWidget(choose_export_button)
+
+        export_figure_button = QPushButton("Export figure...")
+        export_figure_button.clicked.connect(self._export_figure)
+        left_layout.addWidget(export_figure_button)
 
         delete_button = QPushButton("Delete selected")
         delete_button.clicked.connect(self._delete_selected)
@@ -177,6 +322,10 @@ class StyleEditor(QMainWindow):
                 artist.set_picker(8)
             elif ref.kind == "text" and hasattr(artist, "set_picker"):
                 artist.set_picker(True)
+            elif ref.kind == "bar":
+                for patch in artist.patches:
+                    if hasattr(patch, "set_picker"):
+                        patch.set_picker(True)
 
     def _refresh_refs(self) -> None:
         self.pinned_ref = None
@@ -274,7 +423,10 @@ class StyleEditor(QMainWindow):
         for ref in reversed(self.refs):
             if ref.kind in {"figure", "axes", "axis"}:
                 continue
-            if self._artist_contains(ref.artist, event):
+            if ref.kind == "bar":
+                if self._bar_contains(ref, event):
+                    return ref
+            elif self._artist_contains(ref.artist, event):
                 return ref
 
         axis_ref = self._axis_ref_at_event(event)
@@ -349,6 +501,18 @@ class StyleEditor(QMainWindow):
                 pass
         return False
 
+    def _bar_contains(self, ref: ArtistRef, event: Any) -> bool:
+        for patch in ref.artist.patches:
+            if hasattr(patch, "get_visible") and not patch.get_visible():
+                continue
+            try:
+                contains, _details = patch.contains(event)
+            except Exception:
+                continue
+            if contains:
+                return True
+        return False
+
     def _artist_contains(self, artist: Any, event: Any) -> bool:
         if hasattr(artist, "get_visible") and not artist.get_visible():
             return False
@@ -399,6 +563,24 @@ class StyleEditor(QMainWindow):
             if hasattr(artist, "get_zorder") and hasattr(artist, "set_zorder"):
                 state["zorder"] = artist.get_zorder()
                 artist.set_zorder(float(state["zorder"]) + 1000)
+        elif ref.kind == "bar":
+            state["patches"] = []
+            for patch in artist.patches:
+                patch_state = {
+                    "patch": patch,
+                    "path_effects": patch.get_path_effects() if hasattr(patch, "get_path_effects") else None,
+                    "zorder": patch.get_zorder() if hasattr(patch, "get_zorder") else None,
+                }
+                state["patches"].append(patch_state)
+                if hasattr(patch, "set_path_effects"):
+                    patch.set_path_effects(
+                        [
+                            path_effects.withStroke(linewidth=5, foreground="#ffcc00"),
+                            path_effects.Normal(),
+                        ]
+                    )
+                if hasattr(patch, "set_zorder") and patch_state["zorder"] is not None:
+                    patch.set_zorder(float(patch_state["zorder"]) + 1000)
         elif ref.kind == "legend":
             frame = artist.get_frame()
             state["frame"] = {
@@ -447,6 +629,13 @@ class StyleEditor(QMainWindow):
         if ref.kind in {"line", "spine"}:
             if "zorder" in state:
                 artist.set_zorder(state["zorder"])
+        elif ref.kind == "bar" and "patches" in state:
+            for patch_state in state["patches"]:
+                patch = patch_state["patch"]
+                if patch_state["path_effects"] is not None:
+                    patch.set_path_effects(patch_state["path_effects"])
+                if patch_state["zorder"] is not None:
+                    patch.set_zorder(patch_state["zorder"])
         elif ref.kind == "legend" and "frame" in state:
             frame = artist.get_frame()
             frame_state = state["frame"]
@@ -508,6 +697,19 @@ class StyleEditor(QMainWindow):
             self._add_choice("Marker", artist.get_marker(), ["None", " ", ".", "o", "s", "^", "v", "D", "x", "+", "*"], artist.set_marker)
             self._add_float("Marker size", artist.get_markersize(), artist.set_markersize, 0.0, 40.0, 0.5)
             self._add_float("Alpha", artist.get_alpha() if artist.get_alpha() is not None else 1.0, artist.set_alpha, 0.0, 1.0, 0.05)
+        elif ref.kind == "bar":
+            first_patch = self._first_bar_patch(artist)
+            if first_patch is None:
+                self.form.addRow(QLabel("This bar series has no patches."))
+            else:
+                self._add_bool("Visible", all(patch.get_visible() for patch in artist.patches), lambda v: self._set_bar_visible(artist, v))
+                self._add_text("Label", artist.get_label(), artist.set_label)
+                self._add_color("Fill color", first_patch.get_facecolor(), lambda v: self._set_bar_facecolor(artist, v))
+                self._add_color("Edge color", first_patch.get_edgecolor(), lambda v: self._set_bar_edgecolor(artist, v))
+                self._add_float("Edge width", first_patch.get_linewidth(), lambda v: self._set_bar_linewidth(artist, v), 0.0, 20.0, 0.25)
+                self._add_float("Alpha", first_patch.get_alpha() if first_patch.get_alpha() is not None else 1.0, lambda v: self._set_bar_alpha(artist, v), 0.0, 1.0, 0.05)
+                self._add_choice("Hatch", first_patch.get_hatch() or "None", ["None", "/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"], lambda v: self._set_bar_hatch(artist, "" if v == "None" else v))
+                self._add_float("Bar width", abs(first_patch.get_width()), lambda v: self._set_bar_width(artist, v), 0.01, 10.0, 0.05, decimals=3)
         elif ref.kind == "text":
             self._add_text("Text", artist.get_text(), artist.set_text)
             self._add_color("Color", artist.get_color(), artist.set_color)
@@ -517,10 +719,11 @@ class StyleEditor(QMainWindow):
         elif ref.kind == "axis":
             axis_name = str(ref.path[2])[0]
             ax = artist.axes
-            scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
-            self._add_choice("Scale", scale, ["linear", "log"], lambda v: self._set_axis_scale(artist, axis_name, v))
-            self._add_float("Tick start", self._axis_tick_start(artist), lambda v: self._apply_axis_ticks(artist, axis_name, v, self._axis_tick_interval(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
-            self._add_float("Tick interval", self._axis_tick_interval(artist), lambda v: self._apply_axis_ticks(artist, axis_name, self._axis_tick_start(artist), v), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
+            if not self._is_categorical_axis(artist, axis_name):
+                scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
+                self._add_choice("Scale", scale, ["linear", "log"], lambda v: self._set_axis_scale(artist, axis_name, v))
+                self._add_float("Tick start", self._axis_tick_start(artist), lambda v: self._apply_axis_ticks(artist, axis_name, v, self._axis_tick_interval(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
+                self._add_float("Tick interval", self._axis_tick_interval(artist), lambda v: self._apply_axis_ticks(artist, axis_name, self._axis_tick_start(artist), v), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
             self._add_float("Tick label size", self._axis_tick_label_prop(artist, "fontsize", 10.0), lambda v: self._apply_axis_tick_labels(artist, fontsize=v), 1.0, 96.0, 1.0)
             self._add_color("Tick label color", self._axis_tick_label_prop(artist, "color", "#000000"), lambda v: self._apply_axis_tick_labels(artist, color=v))
             self._add_choice("Tick label weight", self._axis_tick_label_prop(artist, "fontweight", "normal"), ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._apply_axis_tick_labels(artist, weight=v))
@@ -567,11 +770,13 @@ class StyleEditor(QMainWindow):
         step: float,
         live: bool = True,
         decimals: int = 2,
+        keyboard_tracking: bool = False,
     ) -> None:
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setSingleStep(step)
         widget.setDecimals(decimals)
+        widget.setKeyboardTracking(keyboard_tracking)
         widget.setValue(float(value))
         widget._mve_commit = lambda: setter(float(widget.value()))
         save_button = self._add_property_row(label, widget)
@@ -716,11 +921,69 @@ class StyleEditor(QMainWindow):
             ax.set_xscale(scale)
         else:
             ax.set_yscale(scale)
+        axis._mve_scale = scale
         self._apply_axis_ticks(axis, axis_name, self._axis_tick_start(axis), self._axis_tick_interval(axis))
+
+    def _is_categorical_axis(self, axis: Any, axis_name: str) -> bool:
+        ax = axis.axes
+        if axis_name == "x" and any(getattr(container, "patches", None) for container in ax.containers):
+            labels = [label.get_text() for label in axis.get_ticklabels() if label.get_text()]
+            if labels and any(not self._is_float_text(label) for label in labels):
+                return True
+        if getattr(axis.units, "_mapping", None):
+            return True
+        return False
+
+    def _is_float_text(self, value: str) -> bool:
+        try:
+            float(value.replace("\N{MINUS SIGN}", "-"))
+        except ValueError:
+            return False
+        return True
+
+    def _first_bar_patch(self, container: Any) -> Any | None:
+        return container.patches[0] if getattr(container, "patches", None) else None
+
+    def _set_bar_visible(self, container: Any, visible: bool) -> None:
+        for patch in container.patches:
+            patch.set_visible(bool(visible))
+
+    def _set_bar_facecolor(self, container: Any, color: str) -> None:
+        for patch in container.patches:
+            patch.set_facecolor(color)
+
+    def _set_bar_edgecolor(self, container: Any, color: str) -> None:
+        for patch in container.patches:
+            patch.set_edgecolor(color)
+
+    def _set_bar_linewidth(self, container: Any, linewidth: float) -> None:
+        for patch in container.patches:
+            patch.set_linewidth(float(linewidth))
+
+    def _set_bar_alpha(self, container: Any, alpha: float) -> None:
+        for patch in container.patches:
+            patch.set_alpha(float(alpha))
+
+    def _set_bar_hatch(self, container: Any, hatch: str) -> None:
+        for patch in container.patches:
+            patch.set_hatch(hatch)
+
+    def _set_bar_width(self, container: Any, width: float) -> None:
+        for patch in container.patches:
+            self._set_bar_patch_width_centered(patch, width)
+
+    def _set_bar_patch_width_centered(self, patch: Any, width: float) -> None:
+        width = float(width)
+        old_width = float(patch.get_width())
+        center = float(patch.get_x()) + old_width / 2.0
+        signed_width = math.copysign(width, old_width if old_width else 1.0)
+        patch.set_width(signed_width)
+        patch.set_x(center - signed_width / 2.0)
 
     def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float) -> None:
         interval = float(interval)
-        if interval <= 0:
+        start = float(start)
+        if interval <= 0 or not math.isfinite(interval) or not math.isfinite(start):
             return
         ax = axis.axes
         low, high = ax.get_xlim() if axis_name == "x" else ax.get_ylim()
@@ -728,16 +991,20 @@ class StyleEditor(QMainWindow):
         if high < low:
             low, high = high, low
 
+        max_ticks = 1000
         ticks: list[float] = []
-        value = float(start)
+        value = start
         low = value
         if high <= low:
             high = low + interval
         limit = high + interval * 0.5
-        while value <= limit and len(ticks) < 10000:
+        while value <= limit and len(ticks) < max_ticks:
             if math.isfinite(value):
                 ticks.append(value)
             value += interval
+        if len(ticks) >= max_ticks:
+            high = ticks[-1]
+            self.status.setText(f"Limited {axis_name.upper()} ticks to {max_ticks}; increase interval for a wider range.")
 
         if axis_name == "x":
             ax.set_xticks(ticks)
@@ -745,7 +1012,7 @@ class StyleEditor(QMainWindow):
         else:
             ax.set_yticks(ticks)
             ax.set_ylim((high, low) if inverted else (low, high))
-        axis._mve_tick_start = float(start)
+        axis._mve_tick_start = start
         axis._mve_tick_interval = interval
         self._reapply_axis_tick_label_style(axis)
 
@@ -926,6 +1193,7 @@ class StyleEditor(QMainWindow):
         try:
             callback()
             self._sync_current_line_legend_handle()
+            self._sync_current_bar_legend_handle()
             self._mark_dirty(save_button)
         finally:
             self._active_save_button = None
@@ -962,6 +1230,40 @@ class StyleEditor(QMainWindow):
         ]:
             if hasattr(line, getter_name) and hasattr(handle, setter_name):
                 getattr(handle, setter_name)(getattr(line, getter_name)())
+
+    def _sync_current_bar_legend_handle(self) -> None:
+        if self.current_ref is None or self.current_ref.kind != "bar":
+            return
+        container = self.current_ref.artist
+        first_patch = self._first_bar_patch(container)
+        if first_patch is None:
+            return
+        ax = first_patch.axes
+        legend = ax.get_legend()
+        if legend is None:
+            return
+
+        handles = getattr(legend, "legend_handles", None)
+        if handles is None:
+            handles = getattr(legend, "legendHandles", [])
+        label = container.get_label()
+        legend_texts = [text.get_text() for text in legend.get_texts()]
+        try:
+            handle = list(handles)[legend_texts.index(label)]
+        except (ValueError, IndexError, TypeError):
+            return
+        self._copy_bar_style_to_legend_handle(first_patch, handle)
+
+    def _copy_bar_style_to_legend_handle(self, patch: Any, handle: Any) -> None:
+        for getter_name, setter_name in [
+            ("get_facecolor", "set_facecolor"),
+            ("get_edgecolor", "set_edgecolor"),
+            ("get_linewidth", "set_linewidth"),
+            ("get_alpha", "set_alpha"),
+            ("get_hatch", "set_hatch"),
+        ]:
+            if hasattr(patch, getter_name) and hasattr(handle, setter_name):
+                getattr(handle, setter_name)(getattr(patch, getter_name)())
 
     def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
@@ -1107,6 +1409,8 @@ class StyleEditor(QMainWindow):
             artist.set_markersize(props["markersize"])
             artist.set_alpha(props["alpha"])
             artist.set_label(props["label"])
+        elif kind == "bar":
+            self._restore_bar_snapshot(artist, props)
         elif kind == "text":
             artist.set_text(props["text"])
             artist.set_color(props["color"])
@@ -1131,6 +1435,26 @@ class StyleEditor(QMainWindow):
             artist.set_visible(props["visible"])
             artist.set_edgecolor(props["color"])
             artist.set_linewidth(props["linewidth"])
+
+    def _restore_bar_snapshot(self, container: Any, props: dict[str, Any]) -> None:
+        container.set_label(props["label"])
+        for index, patch in enumerate(container.patches):
+            patch.set_visible(self._bar_list_value(props, "visible", index))
+            patch.set_facecolor(self._bar_list_value(props, "facecolor", index))
+            patch.set_edgecolor(self._bar_list_value(props, "edgecolor", index))
+            patch.set_linewidth(self._bar_list_value(props, "linewidth", index))
+            patch.set_alpha(self._bar_list_value(props, "alpha", index))
+            patch.set_hatch(self._bar_list_value(props, "hatch", index) or "")
+            self._set_bar_patch_width_centered(patch, self._bar_list_value(props, "width", index))
+
+    def _bar_list_value(self, props: dict[str, Any], name: str, index: int) -> Any:
+        plural_name = "hatches" if name == "hatch" else f"{name}s"
+        values = props.get(plural_name)
+        if values is None:
+            return props.get(name)
+        if not values:
+            return None
+        return values[min(index, len(values) - 1)]
 
     def _restore_legend_snapshot(self, legend: Any, props: dict[str, Any]) -> None:
         changes = {
@@ -1177,7 +1501,7 @@ class StyleEditor(QMainWindow):
         self._discard_unsaved_preview()
         pinned_ref = self.pinned_ref
         self._clear_hover_highlight()
-        path = export_style(self.fig, self.export_path)
+        path = export_style(self.fig, self.export_path, source=_source_metadata(self.source_path))
         if pinned_ref is not None:
             self._set_hover_highlight(pinned_ref)
         self.status.setText(f"Exported {path}")
@@ -1193,6 +1517,50 @@ class StyleEditor(QMainWindow):
         if filename:
             self.export_path = Path(filename)
             self._export()
+
+    def _export_figure(self) -> None:
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export figure",
+            self._default_figure_export_path(),
+            "PDF files (*.pdf);;PNG files (*.png);;SVG files (*.svg);;JPEG files (*.jpg *.jpeg);;TIFF files (*.tif *.tiff);;All files (*)",
+        )
+        if not filename:
+            return
+        path = Path(filename)
+        if not path.suffix:
+            path = path.with_suffix(self._suffix_for_filter(selected_filter))
+        try:
+            self._save_figure(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Figure export failed", str(exc))
+            return
+        self.status.setText(f"Exported figure {path}")
+        QMessageBox.information(self, "Figure export complete", f"Exported {path}")
+
+    def _default_figure_export_path(self) -> str:
+        stem = self.export_path.stem
+        if stem.endswith("_style_patch"):
+            stem = stem[: -len("_style_patch")]
+        return str(self.export_path.with_name(f"{stem}.pdf"))
+
+    def _suffix_for_filter(self, selected_filter: str) -> str:
+        if "*.png" in selected_filter:
+            return ".png"
+        if "*.svg" in selected_filter:
+            return ".svg"
+        if "*.jpg" in selected_filter or "*.jpeg" in selected_filter:
+            return ".jpg"
+        if "*.tif" in selected_filter or "*.tiff" in selected_filter:
+            return ".tiff"
+        return ".pdf"
+
+    def _save_figure(self, path: str | Path) -> Path:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fit_figure_to_canvas()
+        self.fig.savefig(path, dpi=300, bbox_inches="tight")
+        return path
 
     def _delete_selected(self) -> None:
         ref = self.pinned_ref or self.current_ref
@@ -1235,6 +1603,9 @@ class StyleEditor(QMainWindow):
             artist.set_text("")
         elif ref.kind == "line":
             artist.remove()
+        elif ref.kind == "bar":
+            for patch in list(artist.patches):
+                patch.remove()
         elif ref.kind == "legend":
             artist.remove()
         elif ref.kind == "spine":

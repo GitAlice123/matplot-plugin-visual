@@ -11,8 +11,10 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from matplotlib.axes import Axes
+from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from matplotlib.text import Text
 
 
@@ -85,6 +87,18 @@ def iter_artist_refs(fig: Figure) -> list[ArtistRef]:
                 )
             )
 
+        for container_index, container in enumerate(ax.containers):
+            if isinstance(container, BarContainer) and container.patches:
+                label = container.get_label()
+                refs.append(
+                    ArtistRef(
+                        f"Axes {ax_index} / Bar series {container_index}: {label}",
+                        "bar",
+                        ("axes", ax_index, "containers", container_index),
+                        container,
+                    )
+                )
+
         legend = ax.get_legend()
         if legend is not None:
             refs.append(
@@ -135,6 +149,8 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
         return ax.yaxis
     if target == "lines":
         return ax.lines[int(parts[3])]
+    if target == "containers":
+        return ax.containers[int(parts[3])]
     if target == "legend":
         legend = ax.get_legend()
         if legend is None:
@@ -152,3 +168,11 @@ def is_text_artist(artist: Any) -> bool:
 
 def is_line_artist(artist: Any) -> bool:
     return isinstance(artist, Line2D)
+
+
+def is_bar_container(artist: Any) -> bool:
+    return isinstance(artist, BarContainer) and bool(artist.patches)
+
+
+def is_bar_patch(artist: Any) -> bool:
+    return isinstance(artist, Rectangle)

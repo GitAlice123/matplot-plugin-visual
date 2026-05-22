@@ -13,17 +13,23 @@ from matplotlib.figure import Figure
 from .inspector import iter_artist_refs
 
 
-def export_style(fig: Figure, path: str | Path = "style_patch.py") -> Path:
+def export_style(fig: Figure, path: str | Path = "style_patch.py", source: str | None = None) -> Path:
     """Write an ``apply_style(fig)`` function for supported artists."""
 
     output = Path(path)
-    patches = [_snapshot(ref.kind, ref.path, ref.artist) for ref in iter_artist_refs(fig)]
+    patches = [_snapshot(ref.kind, ref.path, ref.artist, for_export=True) for ref in iter_artist_refs(fig)]
     patches = [patch for patch in patches if patch["props"]]
-    output.write_text(_render_module(patches), encoding="utf-8")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(_render_module(patches, source=source), encoding="utf-8")
     return output
 
 
-def _snapshot(kind: str, artist_path: tuple[Any, ...], artist: Any) -> dict[str, Any]:
+def _snapshot(
+    kind: str,
+    artist_path: tuple[Any, ...],
+    artist: Any,
+    for_export: bool = False,
+) -> dict[str, Any]:
     props: dict[str, Any] = {}
 
     if kind == "figure":
@@ -55,6 +61,18 @@ def _snapshot(kind: str, artist_path: tuple[Any, ...], artist: Any) -> dict[str,
             "alpha": artist.get_alpha(),
             "label": artist.get_label(),
         }
+    elif kind == "bar":
+        patches = list(artist.patches)
+        props = {
+            "label": artist.get_label(),
+            "visibles": [bool(patch.get_visible()) for patch in patches],
+            "facecolors": [_color(patch.get_facecolor()) for patch in patches],
+            "edgecolors": [_color(patch.get_edgecolor()) for patch in patches],
+            "linewidths": [float(patch.get_linewidth()) for patch in patches],
+            "alphas": [patch.get_alpha() for patch in patches],
+            "hatches": [patch.get_hatch() or "" for patch in patches],
+            "widths": [abs(float(patch.get_width())) for patch in patches],
+        }
     elif kind == "text":
         props = {
             "text": artist.get_text(),
@@ -66,17 +84,44 @@ def _snapshot(kind: str, artist_path: tuple[Any, ...], artist: Any) -> dict[str,
     elif kind == "axis":
         axis_name = str(artist_path[2])[0]
         ax = artist.axes
-        props = {
-            "axis": axis_name,
-            "scale": ax.get_xscale() if axis_name == "x" else ax.get_yscale(),
-            "tick_start": _axis_tick_start(artist),
-            "tick_interval": _axis_tick_interval(artist),
-            "tick_label_fontsize": _axis_tick_label_prop(artist, "fontsize", 10.0),
-            "tick_label_color": _color(_axis_tick_label_prop(artist, "color", "#000000")),
-            "tick_label_weight": _axis_tick_label_prop(artist, "fontweight", "normal"),
-            "tick_label_style": _axis_tick_label_prop(artist, "fontstyle", "normal"),
-            "tick_label_rotation": float(_axis_tick_label_prop(artist, "rotation", 0.0)),
-        }
+        scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
+        scale_explicit = hasattr(artist, "_mve_scale")
+        ticks_explicit = hasattr(artist, "_mve_tick_start") or hasattr(artist, "_mve_tick_interval")
+        labels_explicit = any(
+            hasattr(artist, attr)
+            for attr in [
+                "_mve_tick_label_fontsize",
+                "_mve_tick_label_color",
+                "_mve_tick_label_fontweight",
+                "_mve_tick_label_fontstyle",
+                "_mve_tick_label_rotation",
+            ]
+        )
+        props = {"axis": axis_name}
+        if scale_explicit or not for_export:
+            props["scale"] = scale
+            props["scale_explicit"] = bool(scale_explicit)
+        if ticks_explicit or not for_export:
+            props.update(
+                {
+                    "ticks_explicit": bool(ticks_explicit),
+                    "tick_start": _axis_tick_start(artist),
+                    "tick_interval": _axis_tick_interval(artist),
+                }
+            )
+        if labels_explicit or not for_export:
+            props.update(
+                {
+                    "tick_labels_explicit": bool(labels_explicit),
+                    "tick_label_fontsize": _axis_tick_label_prop(artist, "fontsize", 10.0),
+                    "tick_label_color": _color(_axis_tick_label_prop(artist, "color", "#000000")),
+                    "tick_label_weight": _axis_tick_label_prop(artist, "fontweight", "normal"),
+                    "tick_label_style": _axis_tick_label_prop(artist, "fontstyle", "normal"),
+                    "tick_label_rotation": float(_axis_tick_label_prop(artist, "rotation", 0.0)),
+                }
+            )
+        if for_export and set(props) == {"axis"}:
+            props = {}
     elif kind == "legend":
         frame = artist.get_frame()
         props = {
@@ -103,7 +148,26 @@ def _snapshot(kind: str, artist_path: tuple[Any, ...], artist: Any) -> dict[str,
             "linewidth": float(artist.get_linewidth()),
         }
 
-    return {"kind": kind, "path": artist_path, "props": props}
+    return {
+        "kind": kind,
+        "path": _plain_value(artist_path),
+        "props": _plain_value(props),
+    }
+
+
+def _plain_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _plain_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_plain_value(item) for item in value)
+    if isinstance(value, list):
+        return [_plain_value(item) for item in value]
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except (TypeError, ValueError):
+            pass
+    return value
 
 
 def _legend_fontsize(legend: Any) -> float | None:
@@ -174,13 +238,16 @@ def _color(value: Any) -> str | None:
         return str(value)
 
 
-def _render_module(patches: list[dict[str, Any]]) -> str:
+def _render_module(patches: list[dict[str, Any]], source: str | None = None) -> str:
+    source_repr = repr(source)
     return f'''"""Generated by mpl_visual_editor.
 
 Import this file after your original plotting code and call apply_style(fig).
 """
 
 import math
+
+MPL_VISUAL_EDITOR_SOURCE = {source_repr}
 
 STYLE_PATCHES = {pformat(patches, width=100)}
 
@@ -205,6 +272,8 @@ def _resolve(fig, path):
         return ax.yaxis
     if target == "lines":
         return ax.lines[int(parts[3])]
+    if target == "containers":
+        return ax.containers[int(parts[3])]
     if target == "legend":
         return ax.get_legend()
     if target == "spines":
@@ -241,6 +310,16 @@ def apply_style(fig):
             artist.set_markersize(props["markersize"])
             artist.set_alpha(props["alpha"])
             artist.set_label(props["label"])
+        elif kind == "bar":
+            artist.set_label(props["label"])
+            for index, patch in enumerate(artist.patches):
+                patch.set_visible(_list_prop(props, "visible", index))
+                patch.set_facecolor(_list_prop(props, "facecolor", index))
+                patch.set_edgecolor(_list_prop(props, "edgecolor", index))
+                patch.set_linewidth(_list_prop(props, "linewidth", index))
+                patch.set_alpha(_list_prop(props, "alpha", index))
+                patch.set_hatch(_list_prop(props, "hatch", index) or "")
+                _set_bar_width_centered(patch, _list_prop(props, "width", index))
         elif kind == "text":
             artist.set_text(props["text"])
             artist.set_color(props["color"])
@@ -250,19 +329,22 @@ def apply_style(fig):
         elif kind == "axis":
             ax = artist.axes
             axis_name = props["axis"]
-            if axis_name == "x":
-                ax.set_xscale(props["scale"])
-            else:
-                ax.set_yscale(props["scale"])
-            _apply_axis_ticks(ax, axis_name, props["tick_start"], props["tick_interval"])
-            _apply_axis_tick_labels(
-                artist,
-                props["tick_label_fontsize"],
-                props["tick_label_color"],
-                props["tick_label_weight"],
-                props["tick_label_style"],
-                props["tick_label_rotation"],
-            )
+            if props.get("scale_explicit"):
+                if axis_name == "x":
+                    ax.set_xscale(props["scale"])
+                else:
+                    ax.set_yscale(props["scale"])
+            if props.get("ticks_explicit"):
+                _apply_axis_ticks(ax, axis_name, props["tick_start"], props["tick_interval"])
+            if props.get("tick_labels_explicit"):
+                _apply_axis_tick_labels(
+                    artist,
+                    props["tick_label_fontsize"],
+                    props["tick_label_color"],
+                    props["tick_label_weight"],
+                    props["tick_label_style"],
+                    props["tick_label_rotation"],
+                )
         elif kind == "legend":
             ax = artist.axes
             artist = ax.legend(
@@ -302,7 +384,8 @@ def apply_style(fig):
 
 def _apply_axis_ticks(ax, axis_name, start, interval):
     interval = float(interval)
-    if interval <= 0:
+    start = float(start)
+    if interval <= 0 or not math.isfinite(interval) or not math.isfinite(start):
         return
     if axis_name == "x":
         low, high = ax.get_xlim()
@@ -312,25 +395,47 @@ def _apply_axis_ticks(ax, axis_name, start, interval):
     if high < low:
         low, high = high, low
     ticks = []
-    value = float(start)
+    value = start
     low = value
     if high <= low:
         high = low + interval
     limit = high + interval * 0.5
-    while value <= limit and len(ticks) < 10000:
+    max_ticks = 1000
+    while value <= limit and len(ticks) < max_ticks:
         if math.isfinite(value):
             ticks.append(value)
         value += interval
+    if len(ticks) >= max_ticks:
+        high = ticks[-1]
     if axis_name == "x":
         ax.set_xticks(ticks)
         ax.set_xlim((high, low) if inverted else (low, high))
-        ax.xaxis._mve_tick_start = float(start)
+        ax.xaxis._mve_tick_start = start
         ax.xaxis._mve_tick_interval = interval
     else:
         ax.set_yticks(ticks)
         ax.set_ylim((high, low) if inverted else (low, high))
-        ax.yaxis._mve_tick_start = float(start)
+        ax.yaxis._mve_tick_start = start
         ax.yaxis._mve_tick_interval = interval
+
+
+def _list_prop(props, name, index):
+    plural_name = "hatches" if name == "hatch" else f"{{name}}s"
+    values = props.get(plural_name)
+    if values is None:
+        return props.get(name)
+    if not values:
+        return None
+    return values[min(index, len(values) - 1)]
+
+
+def _set_bar_width_centered(patch, width):
+    width = float(width)
+    old_width = float(patch.get_width())
+    center = float(patch.get_x()) + old_width / 2.0
+    signed_width = math.copysign(width, old_width if old_width else 1.0)
+    patch.set_width(signed_width)
+    patch.set_x(center - signed_width / 2.0)
 
 
 def _apply_axis_tick_labels(axis, fontsize, color, weight, style, rotation):
