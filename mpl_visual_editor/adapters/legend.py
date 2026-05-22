@@ -42,3 +42,23 @@ class LegendAdapter(BaseAdapter):
         if isinstance(state, dict) and "frame" in state:
             self._restore_artist_highlight(state["frame"])
 
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        editor._ensure_legend_axes_anchor(artist)
+        artist.set_draggable(True, use_blit=False, update="bbox")
+        frame = artist.get_frame()
+        texts = artist.get_texts()
+        fontsize = texts[0].get_fontsize() if texts else 10
+        editor._add_bool("Visible", artist.get_visible(), artist.set_visible)
+        editor._add_float("Font size", fontsize, lambda v: editor._rebuild_current_legend(fontsize=v), 1.0, 96.0, 1.0)
+        editor._add_bool("Frame", frame.get_visible(), frame.set_visible)
+        editor._add_float("Frame alpha", frame.get_alpha() if frame.get_alpha() is not None else 1.0, frame.set_alpha, 0.0, 1.0, 0.05)
+        editor._add_color("Face color", frame.get_facecolor(), frame.set_facecolor)
+        editor._add_color("Edge color", frame.get_edgecolor(), frame.set_edgecolor)
+        editor._add_position_save_button()
+        editor._add_float("Border pad", artist.borderpad, lambda v: editor._rebuild_current_legend(borderpad=v), 0.0, 5.0, 0.1)
+        editor._add_float("Label spacing", artist.labelspacing, lambda v: editor._rebuild_current_legend(labelspacing=v), 0.0, 5.0, 0.1)
+        editor._add_float("Handle length", artist.handlelength, lambda v: editor._rebuild_current_legend(handlelength=v), 0.0, 8.0, 0.1)
+        editor._add_float("Handle text pad", artist.handletextpad, lambda v: editor._rebuild_current_legend(handletextpad=v), 0.0, 5.0, 0.1)
+        return True
+

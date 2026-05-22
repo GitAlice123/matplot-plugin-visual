@@ -507,46 +507,7 @@ class StyleEditor(QMainWindow):
             self._building_form = False
             return
 
-        if ref.kind == "axis":
-            axis_name = str(ref.path[2])[0]
-            ax = artist.axes
-            if not self._is_categorical_axis(artist, axis_name):
-                scale = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
-                self._add_choice("Scale", scale, ["linear", "log"], lambda v: self._set_axis_scale(artist, axis_name, v))
-                self._add_float("Tick start", self._axis_tick_start(artist), lambda v: self._apply_axis_ticks(artist, axis_name, v, self._axis_tick_interval(artist)), -1_000_000_000.0, 1_000_000_000.0, 0.1, decimals=6)
-                self._add_float("Tick interval", self._axis_tick_interval(artist), lambda v: self._apply_axis_ticks(artist, axis_name, self._axis_tick_start(artist), v), 0.000001, 1_000_000_000.0, 0.1, decimals=6)
-            self._add_float("Tick label size", self._axis_tick_label_prop(artist, "fontsize", 10.0), lambda v: self._apply_axis_tick_labels(artist, fontsize=v), 1.0, 96.0, 1.0)
-            self._add_color("Tick label color", self._axis_tick_label_prop(artist, "color", "#000000"), lambda v: self._apply_axis_tick_labels(artist, color=v))
-            self._add_choice("Tick label weight", self._axis_tick_label_prop(artist, "fontweight", "normal"), ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._apply_axis_tick_labels(artist, weight=v))
-            self._add_choice("Tick label style", self._axis_tick_label_prop(artist, "fontstyle", "normal"), ["normal", "italic", "oblique"], lambda v: self._apply_axis_tick_labels(artist, style=v))
-            self._add_float("Tick label rotation", self._axis_tick_label_prop(artist, "rotation", 0.0), lambda v: self._apply_axis_tick_labels(artist, rotation=v), -180.0, 180.0, 5.0, decimals=1)
-        elif ref.kind == "legend":
-            self._ensure_legend_axes_anchor(artist)
-            artist.set_draggable(True, use_blit=False, update="bbox")
-            frame = artist.get_frame()
-            texts = artist.get_texts()
-            fontsize = texts[0].get_fontsize() if texts else 10
-            self._add_bool("Visible", artist.get_visible(), artist.set_visible)
-            self._add_float("Font size", fontsize, lambda v: self._rebuild_current_legend(fontsize=v), 1.0, 96.0, 1.0)
-            self._add_bool("Frame", frame.get_visible(), frame.set_visible)
-            self._add_float("Frame alpha", frame.get_alpha() if frame.get_alpha() is not None else 1.0, frame.set_alpha, 0.0, 1.0, 0.05)
-            self._add_color("Face color", frame.get_facecolor(), frame.set_facecolor)
-            self._add_color("Edge color", frame.get_edgecolor(), frame.set_edgecolor)
-            self._add_position_save_button()
-            self._add_float("Border pad", artist.borderpad, lambda v: self._rebuild_current_legend(borderpad=v), 0.0, 5.0, 0.1)
-            self._add_float("Label spacing", artist.labelspacing, lambda v: self._rebuild_current_legend(labelspacing=v), 0.0, 5.0, 0.1)
-            self._add_float("Handle length", artist.handlelength, lambda v: self._rebuild_current_legend(handlelength=v), 0.0, 8.0, 0.1)
-            self._add_float("Handle text pad", artist.handletextpad, lambda v: self._rebuild_current_legend(handletextpad=v), 0.0, 5.0, 0.1)
-        elif ref.kind == "unsupported":
-            adapter = get_adapter("unsupported")
-            suggested = adapter.suggested_adapter(artist) if adapter is not None else f"{type(artist).__name__}Adapter"
-            self.form.addRow(QLabel("This artist is detected but not editable yet."))
-            self.form.addRow("Artist type", QLabel(type(artist).__name__))
-            self.form.addRow("Editable", QLabel("No"))
-            self.form.addRow("Reason", QLabel("no adapter registered"))
-            self.form.addRow("Suggested adapter", QLabel(suggested))
-        else:
-            self.form.addRow(QLabel("No editor for this artist type yet."))
+        self.form.addRow(QLabel("No editor for this artist type yet."))
 
         self._building_form = False
 

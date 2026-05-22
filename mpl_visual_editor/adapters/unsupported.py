@@ -9,6 +9,7 @@ from matplotlib.container import Container
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.text import Text
+from PySide6.QtWidgets import QLabel
 
 from ..refs import ArtistRef
 from .base import BaseAdapter
@@ -62,3 +63,12 @@ class UnsupportedAdapter(BaseAdapter):
             "ErrorbarContainer": "ErrorbarAdapter",
         }
         return suggestions.get(name, f"{name}Adapter")
+
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        editor.form.addRow(QLabel("This artist is detected but not editable yet."))
+        editor.form.addRow("Artist type", QLabel(type(artist).__name__))
+        editor.form.addRow("Editable", QLabel("No"))
+        editor.form.addRow("Reason", QLabel("no adapter registered"))
+        editor.form.addRow("Suggested adapter", QLabel(self.suggested_adapter(artist)))
+        return True
