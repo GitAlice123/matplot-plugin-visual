@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
@@ -45,6 +46,8 @@ from .adapters.registry import get_adapter
 from .inspector import iter_artist_refs
 from .refs import ArtistRef
 from .snapshots import snapshot_artist
+
+PREVIEW_DPI = 100.0
 
 
 class _AspectCanvasHost(QWidget):
@@ -64,6 +67,7 @@ def edit(
     fig: Figure,
     export_path: str | Path | None = None,
     apply_existing: bool = True,
+    source_path: str | Path | None = None,
 ) -> None:
     """Open a visual editor for an existing Matplotlib figure.
 
@@ -75,7 +79,7 @@ def edit(
 
     patch_error = None
     patch_warning = None
-    source_path = _infer_calling_script()
+    source_path = Path(source_path).resolve() if source_path is not None else _infer_calling_script()
     patch_path = Path(export_path) if export_path is not None else _default_export_path(source_path)
     if apply_existing and patch_path.exists():
         try:
@@ -240,6 +244,7 @@ class StyleEditor(QMainWindow):
         self._legend_position_dirty = False
         self._fit_in_progress = False
         self._base_subplotpars: tuple[float, float, float, float] | None = None
+        self._preview_zoom: float | None = None
 
         self.setWindowTitle("Matplotlib Visual Style Editor")
         self.resize(1180, 760)
@@ -249,10 +254,14 @@ class StyleEditor(QMainWindow):
         self.canvas.setMinimumSize(1, 1)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.canvas_host = _AspectCanvasHost(self)
+        self.canvas_scroll = QScrollArea()
+        self.canvas_scroll.setWidgetResizable(True)
+        self.canvas_scroll.setAlignment(Qt.AlignCenter)
         self.object_list = QListWidget()
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
         self.status = QLabel("Ready")
+        self.preview_zoom_label = QLabel("Fit")
 
         self._build_ui()
         self._initialize_figure_design_size()
@@ -303,10 +312,30 @@ class StyleEditor(QMainWindow):
         plot_layout = QVBoxLayout(plot_panel)
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.addWidget(self.toolbar)
+        preview_controls = QWidget()
+        preview_controls_layout = QHBoxLayout(preview_controls)
+        preview_controls_layout.setContentsMargins(6, 0, 6, 0)
+        zoom_out_button = QPushButton("-")
+        zoom_out_button.clicked.connect(lambda: self._zoom_preview(1 / 1.25))
+        zoom_in_button = QPushButton("+")
+        zoom_in_button.clicked.connect(lambda: self._zoom_preview(1.25))
+        zoom_fit_button = QPushButton("Fit")
+        zoom_fit_button.clicked.connect(self._fit_preview)
+        zoom_actual_button = QPushButton("100%")
+        zoom_actual_button.clicked.connect(self._actual_size_preview)
+        preview_controls_layout.addWidget(QLabel("Preview zoom:"))
+        preview_controls_layout.addWidget(zoom_out_button)
+        preview_controls_layout.addWidget(zoom_in_button)
+        preview_controls_layout.addWidget(zoom_fit_button)
+        preview_controls_layout.addWidget(zoom_actual_button)
+        preview_controls_layout.addWidget(self.preview_zoom_label)
+        preview_controls_layout.addStretch(1)
+        plot_layout.addWidget(preview_controls)
         canvas_host_layout = QVBoxLayout(self.canvas_host)
         canvas_host_layout.setContentsMargins(24, 24, 24, 24)
         canvas_host_layout.addWidget(self.canvas, 0, Qt.AlignCenter)
-        plot_layout.addWidget(self.canvas_host, 1)
+        self.canvas_scroll.setWidget(self.canvas_host)
+        plot_layout.addWidget(self.canvas_scroll, 1)
 
         side_splitter = QSplitter(Qt.Vertical)
         side_splitter.addWidget(left_panel)
@@ -636,9 +665,12 @@ class StyleEditor(QMainWindow):
     def _apply_figure_size(self, width: float, height: float) -> None:
         self.fig._mve_width = float(width)
         self.fig._mve_height = float(height)
+        self.fig.set_size_inches(float(width), float(height), forward=False)
         self._update_canvas_display_size()
 
     def _enforce_saved_figure_size(self) -> None:
+        width, height = self._figure_size()
+        self.fig.set_size_inches(width, height, forward=False)
         self._update_canvas_display_size()
 
     def _initialize_figure_design_size(self) -> None:
@@ -654,23 +686,43 @@ class StyleEditor(QMainWindow):
         design_width, design_height = self._figure_size()
         if design_width <= 0 or design_height <= 0:
             return
-        host_width = max(1, self.canvas_host.width())
-        host_height = max(1, self.canvas_host.height())
-        if host_width <= 1 or host_height <= 1:
-            return
-
-        aspect = design_width / design_height
-        target_width = host_width
-        target_height = int(round(target_width / aspect))
-        if target_height > host_height:
-            target_height = host_height
-            target_width = int(round(target_height * aspect))
-
-        target_width = max(1, target_width)
-        target_height = max(1, target_height)
+        viewport = self.canvas_scroll.viewport() if hasattr(self, "canvas_scroll") else self.canvas_host
+        host_width = max(1, viewport.width() - 48)
+        host_height = max(1, viewport.height() - 48)
+        natural_width = max(1.0, design_width * PREVIEW_DPI)
+        natural_height = max(1.0, design_height * PREVIEW_DPI)
+        fit_scale = min(host_width / natural_width, host_height / natural_height)
+        scale = fit_scale if self._preview_zoom is None else self._preview_zoom
+        target_width = max(1, int(round(natural_width * scale)))
+        target_height = max(1, int(round(natural_height * scale)))
         if self.canvas.width() != target_width or self.canvas.height() != target_height:
-            self.canvas.setMaximumSize(target_width, target_height)
-            self.canvas.resize(target_width, target_height)
+            self.canvas.setFixedSize(target_width, target_height)
+            self.canvas_host.setMinimumSize(target_width + 48, target_height + 48)
+        self._update_preview_zoom_label(scale)
+
+    def _zoom_preview(self, factor: float) -> None:
+        current_scale = self._current_preview_scale()
+        self._preview_zoom = min(8.0, max(0.1, current_scale * float(factor)))
+        self._update_canvas_display_size()
+
+    def _fit_preview(self) -> None:
+        self._preview_zoom = None
+        self._update_canvas_display_size()
+
+    def _actual_size_preview(self) -> None:
+        self._preview_zoom = 1.0
+        self._update_canvas_display_size()
+
+    def _current_preview_scale(self) -> float:
+        design_width, _design_height = self._figure_size()
+        natural_width = max(1.0, design_width * PREVIEW_DPI)
+        return max(0.1, self.canvas.width() / natural_width)
+
+    def _update_preview_zoom_label(self, scale: float) -> None:
+        if not hasattr(self, "preview_zoom_label"):
+            return
+        suffix = " (Fit)" if self._preview_zoom is None else ""
+        self.preview_zoom_label.setText(f"{scale * 100:.0f}%{suffix}")
 
     def _set_axis_scale(self, axis: Any, axis_name: str, scale: str) -> None:
         ax = axis.axes
@@ -1406,8 +1458,15 @@ class StyleEditor(QMainWindow):
     def _save_figure(self, path: str | Path) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._fit_figure_to_canvas()
-        self.fig.savefig(path, dpi=300, bbox_inches="tight")
+        highlighted_ref = self.hover_ref
+        if highlighted_ref is not None:
+            self._clear_hover_highlight(redraw=False)
+        try:
+            self._fit_figure_to_canvas()
+            self.fig.savefig(path, dpi=300, bbox_inches="tight")
+        finally:
+            if highlighted_ref is not None:
+                self._set_hover_highlight(highlighted_ref)
         return path
 
     def _delete_selected(self) -> None:
