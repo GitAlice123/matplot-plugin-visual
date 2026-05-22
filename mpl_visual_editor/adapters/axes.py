@@ -45,6 +45,16 @@ class AxesAdapter(BaseAdapter):
         if isinstance(state, dict) and "overlay" in state:
             self._remove_overlay(state["overlay"], editor)
 
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        editor._add_text("Title", artist.get_title(), artist.set_title)
+        editor._add_text("X label", artist.get_xlabel(), artist.set_xlabel)
+        editor._add_text("Y label", artist.get_ylabel(), artist.set_ylabel)
+        editor._add_color("Face color", artist.get_facecolor(), artist.set_facecolor)
+        editor._add_bool("X grid", any(line.get_visible() for line in artist.get_xgridlines()), lambda v: artist.grid(v, axis="x"))
+        editor._add_bool("Y grid", any(line.get_visible() for line in artist.get_ygridlines()), lambda v: artist.grid(v, axis="y"))
+        return True
+
     def _remove_overlay(self, overlay: Any, editor: Any) -> None:
         try:
             overlay.remove()

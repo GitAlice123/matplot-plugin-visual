@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from matplotlib.figure import Figure
+from PySide6.QtWidgets import QLabel
 
 from ..refs import ArtistRef
 from .base import BaseAdapter
@@ -75,3 +76,24 @@ class TextAdapter(BaseAdapter):
                 self._restore_artist_highlight(text_state)
             return
         super().restore_highlight(ref, editor, state)
+
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        if ref.kind == "text_group":
+            first_text = editor._first_text_in_group(ref.artist)
+            if first_text is None:
+                editor.form.addRow(QLabel("This text group is empty."))
+                return True
+            editor.form.addRow(QLabel(f"{len(ref.artist)} text artists will be updated together."))
+            editor._add_color("Color", first_text.get_color(), lambda v: editor._set_text_group_color(ref.artist, v))
+            editor._add_float("Font size", first_text.get_fontsize(), lambda v: editor._set_text_group_fontsize(ref.artist, v), 1.0, 160.0, 1.0)
+            editor._add_choice("Weight", first_text.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], lambda v: editor._set_text_group_fontweight(ref.artist, v))
+            editor._add_choice("Style", first_text.get_fontstyle(), ["normal", "italic", "oblique"], lambda v: editor._set_text_group_fontstyle(ref.artist, v))
+            return True
+
+        artist = ref.artist
+        editor._add_text("Text", artist.get_text(), artist.set_text)
+        editor._add_color("Color", artist.get_color(), artist.set_color)
+        editor._add_float("Font size", artist.get_fontsize(), artist.set_fontsize, 1.0, 96.0, 1.0)
+        editor._add_choice("Weight", artist.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], artist.set_fontweight)
+        editor._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
+        return True

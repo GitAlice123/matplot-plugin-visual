@@ -507,49 +507,7 @@ class StyleEditor(QMainWindow):
             self._building_form = False
             return
 
-        if ref.kind == "figure":
-            width, height = self._figure_size()
-            self._add_float("Width inches", width, lambda v: self._set_figure_size(width=v), 1.0, 30.0, 0.25)
-            self._add_float("Height inches", height, lambda v: self._set_figure_size(height=v), 1.0, 30.0, 0.25)
-            aspect = float(width / height) if height else 1.0
-            self._add_float("Aspect ratio", aspect, self._set_figure_aspect, 0.1, 10.0, 0.05, decimals=3)
-        elif ref.kind == "axes":
-            self._add_text("Title", artist.get_title(), artist.set_title)
-            self._add_text("X label", artist.get_xlabel(), artist.set_xlabel)
-            self._add_text("Y label", artist.get_ylabel(), artist.set_ylabel)
-            self._add_color("Face color", artist.get_facecolor(), artist.set_facecolor)
-            self._add_bool("X grid", any(line.get_visible() for line in artist.get_xgridlines()), lambda v: artist.grid(v, axis="x"))
-            self._add_bool("Y grid", any(line.get_visible() for line in artist.get_ygridlines()), lambda v: artist.grid(v, axis="y"))
-        elif ref.kind == "bar":
-            first_patch = self._first_bar_patch(artist)
-            if first_patch is None:
-                self.form.addRow(QLabel("This bar series has no patches."))
-            else:
-                self._add_bool("Visible", all(patch.get_visible() for patch in artist.patches), lambda v: self._set_bar_visible(artist, v))
-                self._add_text("Label", artist.get_label(), artist.set_label)
-                self._add_color("Fill color", first_patch.get_facecolor(), lambda v: self._set_bar_facecolor(artist, v))
-                self._add_color("Edge color", first_patch.get_edgecolor(), lambda v: self._set_bar_edgecolor(artist, v))
-                self._add_float("Edge width", first_patch.get_linewidth(), lambda v: self._set_bar_linewidth(artist, v), 0.0, 20.0, 0.25)
-                self._add_float("Alpha", first_patch.get_alpha() if first_patch.get_alpha() is not None else 1.0, lambda v: self._set_bar_alpha(artist, v), 0.0, 1.0, 0.05)
-                self._add_choice("Hatch", first_patch.get_hatch() or "None", ["None", "/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"], lambda v: self._set_bar_hatch(artist, "" if v == "None" else v))
-                self._add_float("Bar width", abs(first_patch.get_width()), lambda v: self._set_bar_width(artist, v), 0.01, 10.0, 0.05, decimals=3)
-        elif ref.kind == "text":
-            self._add_text("Text", artist.get_text(), artist.set_text)
-            self._add_color("Color", artist.get_color(), artist.set_color)
-            self._add_float("Font size", artist.get_fontsize(), artist.set_fontsize, 1.0, 96.0, 1.0)
-            self._add_choice("Weight", artist.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], artist.set_fontweight)
-            self._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
-        elif ref.kind == "text_group":
-            first_text = self._first_text_in_group(artist)
-            if first_text is None:
-                self.form.addRow(QLabel("This text group is empty."))
-            else:
-                self.form.addRow(QLabel(f"{len(artist)} text artists will be updated together."))
-                self._add_color("Color", first_text.get_color(), lambda v: self._set_text_group_color(artist, v))
-                self._add_float("Font size", first_text.get_fontsize(), lambda v: self._set_text_group_fontsize(artist, v), 1.0, 160.0, 1.0)
-                self._add_choice("Weight", first_text.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._set_text_group_fontweight(artist, v))
-                self._add_choice("Style", first_text.get_fontstyle(), ["normal", "italic", "oblique"], lambda v: self._set_text_group_fontstyle(artist, v))
-        elif ref.kind == "axis":
+        if ref.kind == "axis":
             axis_name = str(ref.path[2])[0]
             ax = artist.axes
             if not self._is_categorical_axis(artist, axis_name):

@@ -6,6 +6,7 @@ from typing import Any
 
 from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
+from PySide6.QtWidgets import QLabel
 
 from ..refs import ArtistRef
 from .base import BaseAdapter
@@ -53,4 +54,21 @@ class BarAdapter(BaseAdapter):
         if isinstance(state, dict):
             for patch_state in state.get("patches", []):
                 self._restore_artist_highlight(patch_state)
+
+    def build_form(self, ref: ArtistRef, editor: Any) -> bool:
+        artist = ref.artist
+        first_patch = editor._first_bar_patch(artist)
+        if first_patch is None:
+            editor.form.addRow(QLabel("This bar series has no patches."))
+            return True
+
+        editor._add_bool("Visible", all(patch.get_visible() for patch in artist.patches), lambda v: editor._set_bar_visible(artist, v))
+        editor._add_text("Label", artist.get_label(), artist.set_label)
+        editor._add_color("Fill color", first_patch.get_facecolor(), lambda v: editor._set_bar_facecolor(artist, v))
+        editor._add_color("Edge color", first_patch.get_edgecolor(), lambda v: editor._set_bar_edgecolor(artist, v))
+        editor._add_float("Edge width", first_patch.get_linewidth(), lambda v: editor._set_bar_linewidth(artist, v), 0.0, 20.0, 0.25)
+        editor._add_float("Alpha", first_patch.get_alpha() if first_patch.get_alpha() is not None else 1.0, lambda v: editor._set_bar_alpha(artist, v), 0.0, 1.0, 0.05)
+        editor._add_choice("Hatch", first_patch.get_hatch() or "None", ["None", "/", "\\", "|", "-", "+", "x", "o", "O", ".", "*"], lambda v: editor._set_bar_hatch(artist, "" if v == "None" else v))
+        editor._add_float("Bar width", abs(first_patch.get_width()), lambda v: editor._set_bar_width(artist, v), 0.01, 10.0, 0.05, decimals=3)
+        return True
 
