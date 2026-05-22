@@ -17,6 +17,7 @@ from matplotlib.path import Path as MplPath
 
 from .inspector import iter_artist_refs
 from .snapshots import snapshot_artist
+from .shapes import apply_shape_props, apply_textbox_props
 
 
 def export_style(fig: Figure, path: str | Path = "style_patch.py", source: str | None = None) -> Path:
@@ -136,6 +137,8 @@ from matplotlib.patches import Patch
 from matplotlib.path import Path
 import numpy as np
 
+from mpl_visual_editor.shapes import apply_shape_props, apply_textbox_props
+
 MPL_VISUAL_EDITOR_SOURCE = {source_repr}
 
 STYLE_PATCHES = {pformat(patches, width=100)}
@@ -159,6 +162,18 @@ def _resolve(fig, path):
         return ax.texts[int(parts[3])]
     if target == "texts_group":
         return tuple(ax.texts)
+    if target == "mve_shapes":
+        editor_id = str(parts[3])
+        for patch in ax.patches:
+            if getattr(patch, "_mve_kind", None) == "shape" and getattr(patch, "_mve_id", None) == editor_id:
+                return patch
+        raise ValueError(f"No editor shape for path: {{path!r}}")
+    if target == "mve_textboxes":
+        editor_id = str(parts[3])
+        for text in ax.texts:
+            if getattr(text, "_mve_kind", None) == "textbox" and getattr(text, "_mve_id", None) == editor_id:
+                return text
+        raise ValueError(f"No editor text box for path: {{path!r}}")
     if target == "xaxis":
         return ax.xaxis
     if target == "yaxis":
@@ -180,11 +195,19 @@ def apply_style(fig):
     """Apply exported visual styling to a Matplotlib Figure."""
 
     for patch in STYLE_PATCHES:
+        kind = patch["kind"]
+        props = patch["props"]
+        if kind == "shape":
+            ax = fig.axes[int(patch["path"][1])]
+            apply_shape_props(ax, props)
+            continue
+        if kind == "textbox":
+            ax = fig.axes[int(patch["path"][1])]
+            apply_textbox_props(ax, props)
+            continue
         artist = _resolve(fig, patch["path"])
         if artist is None:
             continue
-        kind = patch["kind"]
-        props = patch["props"]
 
         if kind == "figure":
             artist.set_size_inches(props["width"], props["height"], forward=True)

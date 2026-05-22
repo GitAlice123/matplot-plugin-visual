@@ -51,6 +51,18 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
         return ax.texts[int(parts[3])]
     if target == "texts_group":
         return tuple(ax.texts)
+    if target == "mve_shapes":
+        editor_id = str(parts[3])
+        for patch in ax.patches:
+            if getattr(patch, "_mve_kind", None) == "shape" and getattr(patch, "_mve_id", None) == editor_id:
+                return patch
+        raise ValueError(f"No editor shape for path: {parts!r}")
+    if target == "mve_textboxes":
+        editor_id = str(parts[3])
+        for text in ax.texts:
+            if getattr(text, "_mve_kind", None) == "textbox" and getattr(text, "_mve_id", None) == editor_id:
+                return text
+        raise ValueError(f"No editor text box for path: {parts!r}")
     if target == "xaxis":
         return ax.xaxis
     if target == "yaxis":

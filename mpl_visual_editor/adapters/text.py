@@ -27,7 +27,10 @@ class TextAdapter(BaseAdapter):
                 self._claim(text, claimed)
                 refs.append(ArtistRef(label, self.kind, path, text))
 
-            for text_index, text in enumerate(ax.texts):
+            editable_texts = [text for text in ax.texts if id(text) not in claimed]
+            for text_index, text in enumerate(editable_texts):
+                if id(text) in claimed:
+                    continue
                 self._claim(text, claimed)
                 value = text.get_text()
                 suffix = f": {value}" if value else ""
@@ -39,13 +42,13 @@ class TextAdapter(BaseAdapter):
                         text,
                     )
                 )
-            if ax.texts:
+            if editable_texts:
                 refs.append(
                     ArtistRef(
-                        f"Axes {ax_index} / Text group ({len(ax.texts)})",
+                        f"Axes {ax_index} / Text group ({len(editable_texts)})",
                         "text_group",
                         ("axes", ax_index, "texts_group"),
-                        tuple(ax.texts),
+                        tuple(editable_texts),
                     )
                 )
         return refs

@@ -39,6 +39,8 @@ class UnsupportedAdapter(BaseAdapter):
         return refs
 
     def _should_report(self, artist: Any, claimed: set[int]) -> bool:
+        if getattr(artist, "_mve_kind", None) == "editor_handle":
+            return False
         if id(artist) in claimed:
             return False
         if isinstance(artist, (Axis, Container)):

@@ -10,6 +10,8 @@ from matplotlib.colors import to_hex
 from matplotlib.markers import MarkerStyle
 import numpy as np
 
+from .shapes import shape_props, textbox_props
+
 
 def snapshot_artist(
     kind: str,
@@ -60,6 +62,10 @@ def snapshot_artist(
             "size": _first_float(artist.get_sizes(), 36.0),
             "alpha": artist.get_alpha(),
         }
+    elif kind == "shape":
+        props = shape_props(artist)
+    elif kind == "textbox":
+        props = textbox_props(artist)
     elif kind == "bar":
         patches = list(artist.patches)
         props = {

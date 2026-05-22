@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -46,6 +47,15 @@ from .adapters.registry import get_adapter
 from .inspector import iter_artist_refs
 from .refs import ArtistRef
 from .snapshots import snapshot_artist
+from .shapes import (
+    add_shape,
+    add_textbox,
+    apply_shape_props,
+    apply_textbox_props,
+    move_artist,
+    shape_props,
+    textbox_props,
+)
 
 PREVIEW_DPI = 100.0
 
@@ -293,6 +303,13 @@ class StyleEditor(QMainWindow):
         self._active_save_button: QPushButton | None = None
         self._position_save_button: QPushButton | None = None
         self._legend_press_xy: tuple[float, float] | None = None
+        self._drag_ref: ArtistRef | None = None
+        self._drag_last_data: tuple[float, float] | None = None
+        self._drag_moved = False
+        self._insert_tool: str | None = None
+        self._draw_anchor_data: tuple[float, float] | None = None
+        self._selection_handles: list[Any] = []
+        self._active_handle: str | None = None
         self._legend_position_dirty = False
         self._fit_in_progress = False
         self._base_subplotpars: tuple[float, float, float, float] | None = None
@@ -337,6 +354,39 @@ class StyleEditor(QMainWindow):
         refresh_button = QPushButton("Refresh objects")
         refresh_button.clicked.connect(self._refresh_refs)
         left_layout.addWidget(refresh_button)
+
+        add_shape_button = QPushButton("Add shape")
+        shape_menu = QMenu(add_shape_button)
+        shape_menu.addSection("Lines")
+        for label, tool in [
+            ("Line", "shape:line"),
+            ("Arrow", "shape:arrow"),
+        ]:
+            action = shape_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
+        shape_menu.addSection("Rectangles")
+        for label, tool in [
+            ("Rectangle", "shape:rectangle"),
+            ("Rounded rectangle", "shape:round_rectangle"),
+        ]:
+            action = shape_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
+        shape_menu.addSection("Basic shapes")
+        for label, tool in [
+            ("Ellipse", "shape:ellipse"),
+            ("Triangle", "shape:triangle"),
+            ("Diamond", "shape:diamond"),
+        ]:
+            action = shape_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
+        shape_menu.addSection("Text")
+        for label, tool in [
+            ("Text box", "textbox"),
+        ]:
+            action = shape_menu.addAction(label)
+            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
+        add_shape_button.setMenu(shape_menu)
+        left_layout.addWidget(add_shape_button)
 
         export_button = QPushButton("Export style patch")
         export_button.clicked.connect(self._export)
@@ -420,6 +470,8 @@ class StyleEditor(QMainWindow):
                 for text in artist:
                     if hasattr(text, "set_picker"):
                         text.set_picker(True)
+            elif ref.kind in {"shape", "textbox"} and hasattr(artist, "set_picker"):
+                artist.set_picker(True)
             elif ref.kind == "bar":
                 for patch in artist.patches:
                     if hasattr(patch, "set_picker"):
@@ -429,6 +481,7 @@ class StyleEditor(QMainWindow):
 
     def _refresh_refs(self) -> None:
         self.pinned_ref = None
+        self._clear_selection_handles()
         self._clear_hover_highlight()
         self.refs = iter_artist_refs(self.fig)
         self._configure_picking()
@@ -436,6 +489,68 @@ class StyleEditor(QMainWindow):
         if self.refs:
             self.object_list.setCurrentRow(0)
         self._redraw("Object list refreshed")
+
+    def _set_insert_tool(self, tool: str) -> None:
+        self._discard_unsaved_preview()
+        self._insert_tool = tool
+        self.pinned_ref = None
+        self._clear_selection_handles()
+        self._clear_hover_highlight()
+        self.canvas.setCursor(Qt.CrossCursor)
+        label = tool.split(":", 1)[1] if tool.startswith("shape:") else "text box"
+        self.status.setText(f"Click to place {label}, or drag to draw its size. Right-click to cancel.")
+
+    def _clear_insert_tool(self) -> None:
+        self._insert_tool = None
+        self.canvas.unsetCursor()
+
+    def _insert_tool_at_event(self, event: Any) -> bool:
+        if self._insert_tool is None:
+            return False
+        if event.inaxes is None or event.xdata is None or event.ydata is None:
+            self.status.setText("Click inside an axes to place the object.")
+            return True
+        tool = self._insert_tool
+        self._clear_insert_tool()
+        ax = self._target_axes()
+        ax = event.inaxes or ax
+        if ax is None:
+            QMessageBox.information(self, "No axes", "Add an axes before inserting a shape.")
+            return True
+        center = (float(event.xdata), float(event.ydata))
+        if tool.startswith("shape:"):
+            shape_type = tool.split(":", 1)[1]
+            artist = add_shape(ax, shape_type, center=center)
+            message = f"Added {shape_type}. Drag handles to move, resize, or rotate; click Save placement."
+        else:
+            artist = add_textbox(ax, center=center)
+            message = "Added text box. Drag it or its handles, then click Save placement."
+        self._refresh_refs()
+        self._select_ref_by_artist(artist)
+        if self.current_ref is not None:
+            self._active_handle = "end" if tool.startswith("shape:") and tool.split(":", 1)[1] in {"line", "arrow"} else "se"
+            self._drag_last_data = center
+            self._draw_anchor_data = center
+            self._drag_moved = False
+        self._mark_position_dirty()
+        self.status.setText(message)
+        return True
+
+    def _target_axes(self) -> Any | None:
+        ref = self.pinned_ref or self.current_ref
+        artist = getattr(ref, "artist", None)
+        ax = getattr(artist, "axes", None)
+        if ax is not None:
+            return ax
+        return self.fig.axes[0] if self.fig.axes else None
+
+    def _select_ref_by_artist(self, artist: Any) -> None:
+        for ref in self.refs:
+            if ref.artist is artist:
+                self.pinned_ref = ref
+                self._select_ref(ref)
+                self._set_hover_highlight(ref)
+                return
 
     def _on_selection_changed(self, current: QListWidgetItem | None) -> None:
         if current is None:
@@ -448,6 +563,7 @@ class StyleEditor(QMainWindow):
             self._set_hover_highlight(self.current_ref)
             self.status.setText(f"Selected: {self.current_ref.label}")
         self._build_form(self.current_ref)
+        self._show_selection_handles(self.current_ref)
         self._update_canvas_display_size()
 
     def _connect_hover_events(self) -> None:
@@ -457,6 +573,12 @@ class StyleEditor(QMainWindow):
         self.canvas.mpl_connect("figure_leave_event", self._on_canvas_leave)
 
     def _on_canvas_motion(self, event: Any) -> None:
+        if self._active_handle is not None:
+            self._drag_selection_handle(event)
+            return
+        if self._drag_ref is not None:
+            self._drag_editor_artist(event)
+            return
         if self.pinned_ref is not None:
             return
 
@@ -471,13 +593,27 @@ class StyleEditor(QMainWindow):
         self.status.setText(f"Hover: {ref.label}")
 
     def _on_canvas_click(self, event: Any) -> None:
+        if event.button == 3 and self._insert_tool is not None:
+            self._clear_insert_tool()
+            self.status.setText("Insert cancelled.")
+            return
         if event.button != 1:
+            return
+        if self._insert_tool_at_event(event):
+            return
+
+        handle = self._find_selection_handle(event)
+        if handle is not None:
+            self._active_handle = handle
+            self._drag_last_data = (float(event.xdata), float(event.ydata)) if event.xdata is not None and event.ydata is not None else None
+            self._drag_moved = False
             return
 
         ref = self._find_ref_at_event(event)
         if ref is None:
             self._discard_unsaved_preview()
             self.pinned_ref = None
+            self._clear_selection_handles()
             self._clear_hover_highlight()
             self.status.setText("Selection unlocked")
             return
@@ -487,12 +623,36 @@ class StyleEditor(QMainWindow):
         self.pinned_ref = ref
         self._select_ref(ref)
         self._set_hover_highlight(ref)
+        self._show_selection_handles(ref)
         self._update_canvas_display_size()
+        if ref.kind in {"shape", "textbox"} and event.xdata is not None and event.ydata is not None:
+            self._drag_ref = ref
+            self._drag_last_data = (float(event.xdata), float(event.ydata))
+            self._drag_moved = False
         if ref.kind == "legend":
             self._legend_press_xy = (float(event.x), float(event.y))
         self.status.setText(f"Pinned: {ref.label}")
 
     def _on_canvas_release(self, event: Any) -> None:
+        if self._active_handle is not None:
+            moved = self._drag_moved
+            self._active_handle = None
+            self._drag_last_data = None
+            self._draw_anchor_data = None
+            self._drag_moved = False
+            if moved:
+                self._mark_position_dirty()
+                self.status.setText("Placement changed. Click Save placement to keep it.")
+            return
+        if self._drag_ref is not None:
+            moved = self._drag_moved
+            self._drag_ref = None
+            self._drag_last_data = None
+            self._drag_moved = False
+            if moved:
+                self._mark_position_dirty()
+                self.status.setText("Placement moved. Click Save placement to keep it.")
+            return
         if (
             self.current_ref is None
             or self.current_ref.kind != "legend"
@@ -517,7 +677,270 @@ class StyleEditor(QMainWindow):
             return
         self._clear_hover_highlight()
 
+    def _drag_editor_artist(self, event: Any) -> None:
+        if (
+            self._drag_ref is None
+            or self._drag_last_data is None
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
+        x, y = float(event.xdata), float(event.ydata)
+        last_x, last_y = self._drag_last_data
+        dx, dy = x - last_x, y - last_y
+        if dx == 0 and dy == 0:
+            return
+        move_artist(self._drag_ref.artist, dx, dy)
+        self._drag_last_data = (x, y)
+        self._drag_moved = True
+        self._show_selection_handles(self._drag_ref)
+        self.canvas.draw_idle()
+
+    def _find_selection_handle(self, event: Any) -> str | None:
+        if event.x is None or event.y is None:
+            return None
+        best_handle: str | None = None
+        best_distance = float("inf")
+        priority = {
+            "start": 0,
+            "end": 0,
+            "rotate": 1,
+            "nw": 2,
+            "n": 2,
+            "ne": 2,
+            "e": 2,
+            "se": 2,
+            "s": 2,
+            "sw": 2,
+            "w": 2,
+            "move": 3,
+        }
+        for handle in reversed(self._selection_handles):
+            try:
+                xdata = float(handle.get_xdata()[0])
+                ydata = float(handle.get_ydata()[0])
+                hx, hy = handle.axes.transData.transform((xdata, ydata))
+            except Exception:
+                continue
+            distance = math.hypot(float(event.x) - hx, float(event.y) - hy)
+            radius = float(getattr(handle, "_mve_hit_radius", 12.0))
+            if distance > radius:
+                continue
+            handle_name = getattr(handle, "_mve_handle", None)
+            if handle_name is None:
+                continue
+            if (
+                best_handle is None
+                or distance < best_distance - 0.5
+                or (
+                    math.isclose(distance, best_distance, abs_tol=0.5)
+                    and priority.get(handle_name, 99) < priority.get(best_handle, 99)
+                )
+            ):
+                best_handle = handle_name
+                best_distance = distance
+        return best_handle
+
+    def _drag_selection_handle(self, event: Any) -> None:
+        if (
+            self.current_ref is None
+            or self._active_handle is None
+            or event.xdata is None
+            or event.ydata is None
+        ):
+            return
+        ref = self.current_ref
+        x, y = float(event.xdata), float(event.ydata)
+        if ref.kind == "shape":
+            self._drag_shape_handle(ref, self._active_handle, x, y)
+        elif ref.kind == "textbox":
+            self._drag_textbox_handle(ref, self._active_handle, x, y)
+        else:
+            return
+        self._drag_moved = True
+        self._show_selection_handles(ref)
+        self.canvas.draw_idle()
+
+    def _drag_shape_handle(self, ref: ArtistRef, handle: str, x: float, y: float) -> None:
+        props = shape_props(ref.artist)
+        cx, cy = float(props["x"]), float(props["y"])
+        if handle == "move":
+            if self._drag_last_data is None:
+                self._drag_last_data = (x, y)
+            last_x, last_y = self._drag_last_data
+            props["x"] = cx + x - last_x
+            props["y"] = cy + y - last_y
+            self._drag_last_data = (x, y)
+        elif handle in {"start", "end"}:
+            points = self._shape_handle_points(props)
+            fixed_name = "end" if handle == "start" else "start"
+            fixed = self._draw_anchor_data if self._draw_anchor_data is not None and handle == "end" else points.get(fixed_name)
+            if fixed is None:
+                return
+            fx, fy = fixed
+            props["x"] = (x + fx) / 2.0
+            props["y"] = (y + fy) / 2.0
+            props["width"] = max(math.hypot(x - fx, y - fy), 1e-12)
+            if handle == "start":
+                props["angle"] = math.degrees(math.atan2(fy - y, fx - x))
+            else:
+                props["angle"] = math.degrees(math.atan2(y - fy, x - fx))
+        elif handle == "rotate":
+            props["angle"] = math.degrees(math.atan2(y - cy, x - cx)) - 90.0
+        else:
+            points = self._shape_handle_points(props)
+            opposite_name = {
+                "nw": "se",
+                "n": "s",
+                "ne": "sw",
+                "e": "w",
+                "se": "nw",
+                "s": "n",
+                "sw": "ne",
+                "w": "e",
+            }.get(handle)
+            opposite = self._draw_anchor_data if self._draw_anchor_data is not None and handle == "se" else (
+                points.get(opposite_name) if opposite_name else None
+            )
+            if opposite is None:
+                return
+            ox, oy = opposite
+            props["x"] = (x + ox) / 2.0
+            props["y"] = (y + oy) / 2.0
+            angle = math.radians(float(props.get("angle", 0.0)))
+            cos_a, sin_a = math.cos(-angle), math.sin(-angle)
+            dx, dy = x - ox, y - oy
+            local_x = dx * cos_a - dy * sin_a
+            local_y = dx * sin_a + dy * cos_a
+            if props.get("type") in {"line", "arrow"}:
+                props["width"] = max(abs(local_x), 1e-12)
+            else:
+                if handle in {"nw", "ne", "e", "se", "sw", "w"}:
+                    props["width"] = max(abs(local_x), 1e-12)
+                if handle in {"nw", "n", "ne", "se", "s", "sw"}:
+                    props["height"] = max(abs(local_y), 1e-12)
+        apply_shape_props(ref.artist.axes, props, ref.artist)
+
+    def _drag_textbox_handle(self, ref: ArtistRef, handle: str, x: float, y: float) -> None:
+        props = textbox_props(ref.artist)
+        cx, cy = float(props["x"]), float(props["y"])
+        if handle == "move":
+            if self._drag_last_data is None:
+                self._drag_last_data = (x, y)
+            last_x, last_y = self._drag_last_data
+            props["x"] = cx + x - last_x
+            props["y"] = cy + y - last_y
+            self._drag_last_data = (x, y)
+        elif handle == "rotate":
+            props["rotation"] = math.degrees(math.atan2(y - cy, x - cx)) - 90.0
+        else:
+            points = self._textbox_handle_points(ref.artist)
+            current = math.hypot(points.get(handle, (x, y))[0] - cx, points.get(handle, (x, y))[1] - cy)
+            updated = math.hypot(x - cx, y - cy)
+            if current > 1e-12:
+                props["fontsize"] = max(1.0, min(160.0, float(props["fontsize"]) * updated / current))
+        apply_textbox_props(ref.artist.axes, props, ref.artist)
+
+    def _show_selection_handles(self, ref: ArtistRef | None) -> None:
+        self._clear_selection_handles()
+        if ref is None or ref.kind not in {"shape", "textbox"}:
+            return
+        ax = ref.artist.axes
+        if ref.kind == "shape":
+            points = self._shape_handle_points(shape_props(ref.artist))
+        else:
+            points = self._textbox_handle_points(ref.artist)
+        for name, (x, y) in points.items():
+            marker = "o" if name in {"rotate", "start", "end"} else "s"
+            handle = ax.plot(
+                [x],
+                [y],
+                marker=marker,
+                markersize=2.0 if name in {"start", "end", "move"} else 1.8,
+                markerfacecolor="#ffffff",
+                markeredgecolor="#1976d2",
+                markeredgewidth=0.8,
+                color="#1976d2",
+                linestyle="None",
+                zorder=10000,
+                picker=10,
+            )[0]
+            handle._mve_kind = "editor_handle"
+            handle._mve_handle = name
+            handle._mve_hit_radius = 14.0 if name in {"start", "end"} else 10.0
+            self._selection_handles.append(handle)
+
+    def _clear_selection_handles(self) -> None:
+        for handle in self._selection_handles:
+            try:
+                handle.remove()
+            except Exception:
+                pass
+        self._selection_handles = []
+
+    def _shape_handle_points(self, props: dict[str, Any]) -> dict[str, tuple[float, float]]:
+        x, y = float(props["x"]), float(props["y"])
+        width = float(props["width"])
+        if props.get("type") in {"line", "arrow"}:
+            angle = math.radians(float(props.get("angle", 0.0)))
+            dx = math.cos(angle) * width / 2.0
+            dy = math.sin(angle) * width / 2.0
+            return {
+                "start": (x - dx, y - dy),
+                "move": (x, y),
+                "end": (x + dx, y + dy),
+            }
+        height = (
+            float(props["height"])
+            if props.get("type") not in {"line", "arrow"}
+            else max(float(props["width"]) * 0.2, 1e-12)
+        )
+        angle = math.radians(float(props.get("angle", 0.0)))
+        corners = {
+            "nw": (-width / 2.0, height / 2.0),
+            "n": (0.0, height / 2.0),
+            "ne": (width / 2.0, height / 2.0),
+            "e": (width / 2.0, 0.0),
+            "se": (width / 2.0, -height / 2.0),
+            "s": (0.0, -height / 2.0),
+            "sw": (-width / 2.0, -height / 2.0),
+            "w": (-width / 2.0, 0.0),
+            "move": (0.0, 0.0),
+            "rotate": (0.0, height / 2.0 + max(height, width) * 0.25),
+        }
+        return {name: self._rotate_point(x, y, px, py, angle) for name, (px, py) in corners.items()}
+
+    def _textbox_handle_points(self, artist: Any) -> dict[str, tuple[float, float]]:
+        ax = artist.axes
+        renderer = self.canvas.get_renderer()
+        try:
+            bbox = artist.get_window_extent(renderer=renderer).transformed(ax.transData.inverted())
+            x0, x1, y0, y1 = bbox.x0, bbox.x1, bbox.y0, bbox.y1
+        except Exception:
+            x, y = artist.get_position()
+            span_x = abs(ax.get_xlim()[1] - ax.get_xlim()[0]) * 0.12
+            span_y = abs(ax.get_ylim()[1] - ax.get_ylim()[0]) * 0.08
+            x0, x1, y0, y1 = x - span_x / 2.0, x + span_x / 2.0, y - span_y / 2.0, y + span_y / 2.0
+        cx, cy = artist.get_position()
+        return {
+            "nw": (x0, y1),
+            "n": ((x0 + x1) / 2.0, y1),
+            "ne": (x1, y1),
+            "e": (x1, (y0 + y1) / 2.0),
+            "se": (x1, y0),
+            "s": ((x0 + x1) / 2.0, y0),
+            "sw": (x0, y0),
+            "w": (x0, (y0 + y1) / 2.0),
+            "move": (float(cx), float(cy)),
+            "rotate": (float(cx), y1 + (y1 - y0) * 0.5),
+        }
+
+    def _rotate_point(self, cx: float, cy: float, x: float, y: float, angle: float) -> tuple[float, float]:
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        return cx + x * cos_a - y * sin_a, cy + x * sin_a + y * cos_a
+
     def closeEvent(self, event: Any) -> None:
+        self._clear_selection_handles()
         self._clear_hover_highlight(redraw=False)
         super().closeEvent(event)
 
@@ -667,10 +1090,10 @@ class StyleEditor(QMainWindow):
         layout.addWidget(save_button)
         self.form.addRow("", row)
 
-    def _add_position_save_button(self) -> None:
-        button = QPushButton("Save position")
+    def _add_position_save_button(self, button_text: str = "Save position") -> None:
+        button = QPushButton(button_text)
         button.setEnabled(False)
-        button.clicked.connect(self._save_current_legend_position)
+        button.clicked.connect(self._save_current_position)
         self._position_save_button = button
         self.form.addRow("Position", button)
 
@@ -1327,6 +1750,7 @@ class StyleEditor(QMainWindow):
     def _mark_position_dirty(self) -> None:
         if self._building_form or self._suppress_dirty:
             return
+        self._dirty = True
         self._legend_position_dirty = True
         if self._position_save_button is not None:
             self._position_save_button.setEnabled(True)
@@ -1355,12 +1779,22 @@ class StyleEditor(QMainWindow):
         for button in self._save_buttons:
             button.setEnabled(False)
             button.setStyleSheet("")
+        if self._position_save_button is not None:
+            self._position_save_button.setEnabled(False)
+            self._position_save_button.setStyleSheet("")
+        self._legend_position_dirty = False
         self.status.setText(f"Saved: {self.current_ref.label}")
 
     def _save_current_changes_from_sender(self) -> None:
         sender = self.sender()
         editor_widget = getattr(sender, "_mve_editor_widget", None)
         self._save_current_changes(editor_widget)
+
+    def _save_current_position(self) -> None:
+        if self.current_ref is not None and self.current_ref.kind == "legend":
+            self._save_current_legend_position()
+            return
+        self._save_current_changes()
 
     def _commit_editor(self, widget: QWidget | None = None) -> None:
         if widget is not None and not isinstance(widget, QWidget):
@@ -1424,6 +1858,7 @@ class StyleEditor(QMainWindow):
         if not self._dirty or self.current_ref is None or self._committed_snapshot is None:
             return
         self._clear_hover_highlight(redraw=False)
+        self._clear_selection_handles()
         self._restore_snapshot(self.current_ref, self._committed_snapshot)
         self._dirty = False
         self._legend_position_dirty = False
@@ -1457,6 +1892,10 @@ class StyleEditor(QMainWindow):
             artist.set_label(props["label"])
         elif kind == "bar":
             self._restore_bar_snapshot(artist, props)
+        elif kind == "shape":
+            apply_shape_props(artist.axes, props, artist)
+        elif kind == "textbox":
+            apply_textbox_props(artist.axes, props, artist)
         elif kind == "text":
             artist.set_text(props["text"])
             artist.set_color(props["color"])
@@ -1623,10 +2062,12 @@ class StyleEditor(QMainWindow):
     def _export(self) -> None:
         self._discard_unsaved_preview()
         pinned_ref = self.pinned_ref
+        self._clear_selection_handles()
         self._clear_hover_highlight()
         path = export_style(self.fig, self.export_path, source=_source_metadata(self.source_path))
         if pinned_ref is not None:
             self._set_hover_highlight(pinned_ref)
+            self._show_selection_handles(pinned_ref)
         self.status.setText(f"Exported {path}")
         QMessageBox.information(self, "Export complete", f"Exported {path}")
 
@@ -1682,6 +2123,8 @@ class StyleEditor(QMainWindow):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         highlighted_ref = self.hover_ref
+        selected_ref = self.current_ref
+        self._clear_selection_handles()
         if highlighted_ref is not None:
             self._clear_hover_highlight(redraw=False)
         try:
@@ -1690,6 +2133,7 @@ class StyleEditor(QMainWindow):
         finally:
             if highlighted_ref is not None:
                 self._set_hover_highlight(highlighted_ref)
+            self._show_selection_handles(selected_ref)
         return path
 
     def _delete_selected(self) -> None:
@@ -1707,6 +2151,7 @@ class StyleEditor(QMainWindow):
             return
 
         self._clear_hover_highlight()
+        self._clear_selection_handles()
         self.pinned_ref = None
         self.current_ref = None
 

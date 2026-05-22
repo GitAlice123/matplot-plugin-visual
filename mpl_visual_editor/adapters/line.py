@@ -17,6 +17,8 @@ class LineAdapter(BaseAdapter):
         refs: list[ArtistRef] = []
         for ax_index, ax in enumerate(fig.axes):
             for line_index, line in enumerate(ax.lines):
+                if getattr(line, "_mve_kind", None) == "editor_handle":
+                    continue
                 self._claim(line, claimed)
                 refs.append(
                     ArtistRef(
