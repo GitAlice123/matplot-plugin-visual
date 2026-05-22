@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from matplotlib.figure import Figure
 
 from ..refs import ArtistRef
@@ -53,3 +55,8 @@ class TextAdapter(BaseAdapter):
                 text.set_text("")
             return
         ref.artist.set_text("")
+
+    def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
+        if ref.kind == "text_group":
+            return any(self._artist_contains(text, event) for text in ref.artist)
+        return super().hit_test(ref, event, editor)

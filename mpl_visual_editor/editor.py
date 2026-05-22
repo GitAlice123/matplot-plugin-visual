@@ -444,13 +444,8 @@ class StyleEditor(QMainWindow):
         for ref in reversed(self.refs):
             if ref.kind in {"figure", "axes", "axis"}:
                 continue
-            if ref.kind == "bar":
-                if self._bar_contains(ref, event):
-                    return ref
-            elif ref.kind == "text_group":
-                if self._text_group_contains(ref, event):
-                    return ref
-            elif self._artist_contains(ref.artist, event):
+            adapter = get_adapter(ref.kind)
+            if adapter is not None and adapter.hit_test(ref, event, self):
                 return ref
 
         axis_ref = self._axis_ref_at_event(event)
@@ -524,30 +519,6 @@ class StyleEditor(QMainWindow):
             except Exception:
                 pass
         return False
-
-    def _bar_contains(self, ref: ArtistRef, event: Any) -> bool:
-        for patch in ref.artist.patches:
-            if hasattr(patch, "get_visible") and not patch.get_visible():
-                continue
-            try:
-                contains, _details = patch.contains(event)
-            except Exception:
-                continue
-            if contains:
-                return True
-        return False
-
-    def _text_group_contains(self, ref: ArtistRef, event: Any) -> bool:
-        return any(self._artist_contains(text, event) for text in ref.artist)
-
-    def _artist_contains(self, artist: Any, event: Any) -> bool:
-        if hasattr(artist, "get_visible") and not artist.get_visible():
-            return False
-        try:
-            contains, _details = artist.contains(event)
-        except Exception:
-            return False
-        return bool(contains)
 
     def _select_ref(self, ref: ArtistRef) -> None:
         for row in range(self.object_list.count()):

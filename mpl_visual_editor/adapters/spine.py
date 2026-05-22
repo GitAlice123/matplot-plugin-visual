@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from matplotlib.figure import Figure
 
 from ..refs import ArtistRef
@@ -28,4 +30,15 @@ class SpineAdapter(BaseAdapter):
 
     def delete(self, ref: ArtistRef) -> None:
         ref.artist.set_visible(False)
+
+    def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
+        if super().hit_test(ref, event, editor):
+            return True
+        if event.x is None or event.y is None:
+            return False
+        try:
+            bbox = ref.artist.get_window_extent(renderer=editor.canvas.get_renderer()).expanded(1.4, 2.4)
+            return bool(bbox.contains(float(event.x), float(event.y)))
+        except Exception:
+            return False
 

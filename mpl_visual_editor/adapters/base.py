@@ -51,7 +51,16 @@ class BaseAdapter:
         claimed.add(id(artist))
 
     def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
-        return False
+        return self._artist_contains(ref.artist, event)
+
+    def _artist_contains(self, artist: Any, event: Any) -> bool:
+        if hasattr(artist, "get_visible") and not artist.get_visible():
+            return False
+        try:
+            contains, _details = artist.contains(event)
+        except Exception:
+            return False
+        return bool(contains)
 
     def highlight(self, ref: ArtistRef, editor: Any) -> Any:
         return None

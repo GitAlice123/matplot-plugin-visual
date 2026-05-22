@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from matplotlib.container import BarContainer
 from matplotlib.figure import Figure
 
@@ -34,4 +36,7 @@ class BarAdapter(BaseAdapter):
     def delete(self, ref: ArtistRef) -> None:
         for patch in list(ref.artist.patches):
             patch.remove()
+
+    def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
+        return any(self._artist_contains(patch, event) for patch in ref.artist.patches)
 
