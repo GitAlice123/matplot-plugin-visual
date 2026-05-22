@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from matplotlib.figure import Figure
@@ -49,8 +50,57 @@ class ShapeAdapter(BaseAdapter):
     def delete(self, ref: ArtistRef) -> None:
         ref.artist.remove()
 
+    def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
+        if ref.kind == "shape":
+            props = shape_props(ref.artist)
+            if props.get("type") in {"line", "arrow"}:
+                return self._hit_test_line_shape(ref.artist, props, event)
+        return super().hit_test(ref, event, editor)
+
     def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
         return {"kind": ref.kind, "artist": self._highlight_artist(ref.artist, linewidth=4, boost_zorder=True)}
+
+    def _hit_test_line_shape(self, artist: Any, props: dict[str, Any], event: Any) -> bool:
+        if event.x is None or event.y is None:
+            return False
+        if hasattr(artist, "get_visible") and not artist.get_visible():
+            return False
+        x = float(props["x"])
+        y = float(props["y"])
+        width = float(props["width"])
+        angle = math.radians(float(props.get("angle", 0.0)))
+        dx = math.cos(angle) * width / 2.0
+        dy = math.sin(angle) * width / 2.0
+        start = artist.axes.transData.transform((x - dx, y - dy))
+        end = artist.axes.transData.transform((x + dx, y + dy))
+        distance = self._point_to_segment_distance(
+            float(event.x),
+            float(event.y),
+            float(start[0]),
+            float(start[1]),
+            float(end[0]),
+            float(end[1]),
+        )
+        return distance <= max(8.0, float(props.get("linewidth", 1.0)) + 6.0)
+
+    def _point_to_segment_distance(
+        self,
+        px: float,
+        py: float,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+    ) -> float:
+        dx = x2 - x1
+        dy = y2 - y1
+        length_sq = dx * dx + dy * dy
+        if length_sq <= 1e-12:
+            return math.hypot(px - x1, py - y1)
+        t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / length_sq))
+        nearest_x = x1 + t * dx
+        nearest_y = y1 + t * dy
+        return math.hypot(px - nearest_x, py - nearest_y)
 
     def build_form(self, ref: ArtistRef, editor: Any) -> bool:
         if ref.kind == "textbox":
@@ -71,6 +121,7 @@ class ShapeAdapter(BaseAdapter):
             editor._add_float("Angle", props["angle"], lambda v: self._set_shape(artist, angle=v), -360.0, 360.0, 1.0)
             editor._add_color("Color", props["edgecolor"], lambda v: self._set_shape(artist, edgecolor=v))
             editor._add_float("Line width", props["linewidth"], lambda v: self._set_shape(artist, linewidth=v), 0.0, 50.0, 0.25)
+            editor._add_choice("Line style", props["linestyle"], ["-", "--", "-.", ":", "None"], lambda v: self._set_shape(artist, linestyle=v))
             if shape_type == "arrow":
                 editor._add_float("Head size", props["mutation_scale"], lambda v: self._set_shape(artist, mutation_scale=v), 1.0, 200.0, 1.0)
         else:

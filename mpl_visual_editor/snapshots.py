@@ -10,6 +10,8 @@ from matplotlib.colors import to_hex
 from matplotlib.markers import MarkerStyle
 import numpy as np
 
+from .adapters.arrow import arrow_props
+from .fills import fill_props
 from .shapes import shape_props, textbox_props
 
 
@@ -52,6 +54,9 @@ def snapshot_artist(
             "alpha": artist.get_alpha(),
             "label": artist.get_label(),
         }
+        if hasattr(artist, "_mve_xdata") and hasattr(artist, "_mve_ydata"):
+            props["xdata"] = list(artist._mve_xdata)
+            props["ydata"] = list(artist._mve_ydata)
     elif kind == "scatter":
         props = {
             "visible": bool(artist.get_visible()),
@@ -66,6 +71,10 @@ def snapshot_artist(
         props = shape_props(artist)
     elif kind == "textbox":
         props = textbox_props(artist)
+    elif kind == "fill":
+        props = fill_props(artist)
+    elif kind == "arrow":
+        props = arrow_props(artist)
     elif kind == "bar":
         patches = list(artist.patches)
         props = {
@@ -79,8 +88,12 @@ def snapshot_artist(
             "widths": [abs(float(patch.get_width())) for patch in patches],
         }
     elif kind == "text":
+        x, y = artist.get_position()
         props = {
             "text": artist.get_text(),
+            "x": float(x),
+            "y": float(y),
+            "rotation": float(artist.get_rotation()),
             "color": _color(artist.get_color()),
             "fontsize": float(artist.get_fontsize()),
             "fontweight": artist.get_fontweight(),

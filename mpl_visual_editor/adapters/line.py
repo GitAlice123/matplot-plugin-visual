@@ -45,5 +45,6 @@ class LineAdapter(BaseAdapter):
         editor._add_choice("Marker", artist.get_marker(), ["None", " ", ".", "o", "s", "^", "v", "D", "x", "+", "*"], artist.set_marker)
         editor._add_float("Marker size", artist.get_markersize(), artist.set_markersize, 0.0, 40.0, 0.5)
         editor._add_float("Alpha", artist.get_alpha() if artist.get_alpha() is not None else 1.0, artist.set_alpha, 0.0, 1.0, 0.05)
+        editor._add_position_save_button("Save position")
         return True
 

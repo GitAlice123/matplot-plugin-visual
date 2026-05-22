@@ -6,10 +6,12 @@ from typing import Any
 
 from matplotlib.figure import Figure
 
+from .arrow import ArrowAdapter
 from .axes import AxesAdapter
 from .axis import AxisAdapter
 from .bar import BarAdapter
 from .base import ArtistAdapter
+from .fill import FillAdapter
 from .figure import FigureAdapter
 from .legend import LegendAdapter
 from .line import LineAdapter
@@ -24,9 +26,11 @@ _ADAPTERS: list[ArtistAdapter] = [
     FigureAdapter(),
     AxesAdapter(),
     ShapeAdapter(),
+    FillAdapter(),
     TextAdapter(),
     AxisAdapter(),
     LineAdapter(),
+    ArrowAdapter(),
     ScatterAdapter(),
     BarAdapter(),
     LegendAdapter(),

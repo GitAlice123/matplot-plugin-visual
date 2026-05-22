@@ -44,6 +44,8 @@ from PySide6.QtWidgets import (
 
 from .exporter import export_style
 from .adapters.registry import get_adapter
+from .adapters.arrow import apply_arrow_props, arrow_props
+from .fills import apply_fill_props
 from .inspector import iter_artist_refs
 from .refs import ArtistRef
 from .snapshots import snapshot_artist
@@ -327,6 +329,7 @@ class StyleEditor(QMainWindow):
         self.canvas_scroll.setWidgetResizable(True)
         self.canvas_scroll.setAlignment(Qt.AlignCenter)
         self.object_list = QListWidget()
+        self.object_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.form_host = QWidget()
         self.form = QFormLayout(self.form_host)
         self.status = QLabel("Ready")
@@ -507,17 +510,14 @@ class StyleEditor(QMainWindow):
     def _insert_tool_at_event(self, event: Any) -> bool:
         if self._insert_tool is None:
             return False
-        if event.inaxes is None or event.xdata is None or event.ydata is None:
-            self.status.setText("Click inside an axes to place the object.")
+        target = self._event_data_point(event)
+        if target is None:
+            self.status.setText("Click on or near an axes to place the object.")
             return True
         tool = self._insert_tool
         self._clear_insert_tool()
-        ax = self._target_axes()
-        ax = event.inaxes or ax
-        if ax is None:
-            QMessageBox.information(self, "No axes", "Add an axes before inserting a shape.")
-            return True
-        center = (float(event.xdata), float(event.ydata))
+        ax, data_x, data_y = target
+        center = (data_x, data_y)
         if tool.startswith("shape:"):
             shape_type = tool.split(":", 1)[1]
             artist = add_shape(ax, shape_type, center=center)
@@ -527,7 +527,7 @@ class StyleEditor(QMainWindow):
             message = "Added text box. Drag it or its handles, then click Save placement."
         self._refresh_refs()
         self._select_ref_by_artist(artist)
-        if self.current_ref is not None:
+        if self.current_ref is not None and self.current_ref.kind in {"shape", "textbox"}:
             self._active_handle = "end" if tool.startswith("shape:") and tool.split(":", 1)[1] in {"line", "arrow"} else "se"
             self._drag_last_data = center
             self._draw_anchor_data = center
@@ -543,6 +543,56 @@ class StyleEditor(QMainWindow):
         if ax is not None:
             return ax
         return self.fig.axes[0] if self.fig.axes else None
+
+    def _event_data_point(self, event: Any, preferred_axes: Any | None = None) -> tuple[Any, float, float] | None:
+        if event.x is None or event.y is None:
+            return None
+        ax = event.inaxes or preferred_axes or self._target_axes()
+        if ax is None:
+            ax = self._nearest_axes(float(event.x), float(event.y))
+        if ax is None:
+            return None
+        if event.inaxes is ax and event.xdata is not None and event.ydata is not None:
+            return ax, float(event.xdata), float(event.ydata)
+        data_x, data_y = ax.transData.inverted().transform((float(event.x), float(event.y)))
+        return ax, float(data_x), float(data_y)
+
+    def _event_artist_point(self, event: Any, artist: Any) -> tuple[float, float] | None:
+        if event.x is None or event.y is None:
+            return None
+        try:
+            x, y = artist.get_transform().inverted().transform((float(event.x), float(event.y)))
+        except Exception:
+            target = self._event_data_point(event, getattr(artist, "axes", None))
+            if target is None:
+                return None
+            _ax, x, y = target
+        return float(x), float(y)
+
+    def _nearest_axes(self, x: float, y: float) -> Any | None:
+        if not self.fig.axes:
+            return None
+        renderer = self.canvas.get_renderer()
+        best_ax = None
+        best_distance = float("inf")
+        for ax in self.fig.axes:
+            bbox = ax.get_window_extent(renderer=renderer)
+            dx = max(float(bbox.x0) - x, 0.0, x - float(bbox.x1))
+            dy = max(float(bbox.y0) - y, 0.0, y - float(bbox.y1))
+            distance = math.hypot(dx, dy)
+            if distance < best_distance:
+                best_distance = distance
+                best_ax = ax
+        return best_ax
+
+    def _set_text_position(self, artist: Any, x: float | None = None, y: float | None = None) -> None:
+        current_x, current_y = artist.get_position()
+        artist.set_position(
+            (
+                float(current_x if x is None else x),
+                float(current_y if y is None else y),
+            )
+        )
 
     def _select_ref_by_artist(self, artist: Any) -> None:
         for ref in self.refs:
@@ -625,9 +675,17 @@ class StyleEditor(QMainWindow):
         self._set_hover_highlight(ref)
         self._show_selection_handles(ref)
         self._update_canvas_display_size()
-        if ref.kind in {"shape", "textbox"} and event.xdata is not None and event.ydata is not None:
+        target = self._event_data_point(event, ref.artist.axes if hasattr(ref.artist, "axes") else None)
+        if ref.kind == "text":
+            text_point = self._event_artist_point(event, ref.artist)
+            if text_point is not None:
+                self._drag_ref = ref
+                self._drag_last_data = text_point
+                self._drag_moved = False
+        elif ref.kind in {"shape", "textbox", "line", "arrow"} and target is not None:
+            _ax, data_x, data_y = target
             self._drag_ref = ref
-            self._drag_last_data = (float(event.xdata), float(event.ydata))
+            self._drag_last_data = (data_x, data_y)
             self._drag_moved = False
         if ref.kind == "legend":
             self._legend_press_xy = (float(event.x), float(event.y))
@@ -681,20 +739,48 @@ class StyleEditor(QMainWindow):
         if (
             self._drag_ref is None
             or self._drag_last_data is None
-            or event.xdata is None
-            or event.ydata is None
         ):
             return
-        x, y = float(event.xdata), float(event.ydata)
+        if self._drag_ref.kind == "text":
+            text_point = self._event_artist_point(event, self._drag_ref.artist)
+            if text_point is None:
+                return
+            x, y = text_point
+        else:
+            target = self._event_data_point(event, self._drag_ref.artist.axes if hasattr(self._drag_ref.artist, "axes") else None)
+            if target is None:
+                return
+            _ax, x, y = target
         last_x, last_y = self._drag_last_data
         dx, dy = x - last_x, y - last_y
         if dx == 0 and dy == 0:
             return
-        move_artist(self._drag_ref.artist, dx, dy)
+        self._move_geometry_ref(self._drag_ref, dx, dy)
         self._drag_last_data = (x, y)
         self._drag_moved = True
         self._show_selection_handles(self._drag_ref)
         self.canvas.draw_idle()
+
+    def _move_geometry_ref(self, ref: ArtistRef, dx: float, dy: float) -> None:
+        if ref.kind in {"shape", "textbox"}:
+            move_artist(ref.artist, dx, dy)
+        elif ref.kind == "text":
+            x, y = ref.artist.get_position()
+            ref.artist.set_position((float(x) + dx, float(y) + dy))
+        elif ref.kind == "line":
+            self._move_line(ref.artist, dx, dy)
+        elif ref.kind == "arrow":
+            props = arrow_props(ref.artist)
+            props["posA"] = [props["posA"][0] + dx, props["posA"][1] + dy]
+            props["posB"] = [props["posB"][0] + dx, props["posB"][1] + dy]
+            apply_arrow_props(ref.artist, props)
+
+    def _move_line(self, line: Any, dx: float, dy: float) -> None:
+        xdata = [float(x) + dx for x in line.get_xdata()]
+        ydata = [float(y) + dy for y in line.get_ydata()]
+        line.set_data(xdata, ydata)
+        line._mve_xdata = list(xdata)
+        line._mve_ydata = list(ydata)
 
     def _find_selection_handle(self, event: Any) -> str | None:
         if event.x is None or event.y is None:
@@ -745,16 +831,23 @@ class StyleEditor(QMainWindow):
         if (
             self.current_ref is None
             or self._active_handle is None
-            or event.xdata is None
-            or event.ydata is None
         ):
             return
         ref = self.current_ref
-        x, y = float(event.xdata), float(event.ydata)
+        target = self._event_data_point(event, ref.artist.axes if hasattr(ref.artist, "axes") else None)
+        if target is None:
+            return
+        _ax, x, y = target
         if ref.kind == "shape":
             self._drag_shape_handle(ref, self._active_handle, x, y)
         elif ref.kind == "textbox":
             self._drag_textbox_handle(ref, self._active_handle, x, y)
+        elif ref.kind == "text":
+            self._drag_text_handle(ref, self._active_handle, x, y)
+        elif ref.kind == "line":
+            self._drag_line_handle(ref, self._active_handle, x, y)
+        elif ref.kind == "arrow":
+            self._drag_arrow_handle(ref, self._active_handle, x, y)
         else:
             return
         self._drag_moved = True
@@ -841,15 +934,65 @@ class StyleEditor(QMainWindow):
                 props["fontsize"] = max(1.0, min(160.0, float(props["fontsize"]) * updated / current))
         apply_textbox_props(ref.artist.axes, props, ref.artist)
 
+    def _drag_text_handle(self, ref: ArtistRef, handle: str, x: float, y: float) -> None:
+        if handle != "move":
+            return
+        ref.artist.set_position((x, y))
+
+    def _drag_line_handle(self, ref: ArtistRef, handle: str, x: float, y: float) -> None:
+        line = ref.artist
+        xdata = [float(value) for value in line.get_xdata()]
+        ydata = [float(value) for value in line.get_ydata()]
+        if not xdata or not ydata:
+            return
+        if handle == "move":
+            if self._drag_last_data is None:
+                self._drag_last_data = (x, y)
+            last_x, last_y = self._drag_last_data
+            self._move_line(line, x - last_x, y - last_y)
+            self._drag_last_data = (x, y)
+            return
+        if len(xdata) == 2 and handle in {"start", "end"}:
+            index = 0 if handle == "start" else 1
+            xdata[index] = x
+            ydata[index] = y
+            line.set_data(xdata, ydata)
+            line._mve_xdata = list(xdata)
+            line._mve_ydata = list(ydata)
+
+    def _drag_arrow_handle(self, ref: ArtistRef, handle: str, x: float, y: float) -> None:
+        props = arrow_props(ref.artist)
+        if handle == "move":
+            if self._drag_last_data is None:
+                self._drag_last_data = (x, y)
+            last_x, last_y = self._drag_last_data
+            dx, dy = x - last_x, y - last_y
+            props["posA"] = [props["posA"][0] + dx, props["posA"][1] + dy]
+            props["posB"] = [props["posB"][0] + dx, props["posB"][1] + dy]
+            self._drag_last_data = (x, y)
+        elif handle == "start":
+            props["posA"] = [x, y]
+        elif handle == "end":
+            props["posB"] = [x, y]
+        else:
+            return
+        apply_arrow_props(ref.artist, props)
+
     def _show_selection_handles(self, ref: ArtistRef | None) -> None:
         self._clear_selection_handles()
-        if ref is None or ref.kind not in {"shape", "textbox"}:
+        if ref is None or ref.kind not in {"shape", "textbox", "text", "line", "arrow"}:
             return
         ax = ref.artist.axes
         if ref.kind == "shape":
             points = self._shape_handle_points(shape_props(ref.artist))
-        else:
+        elif ref.kind == "textbox":
             points = self._textbox_handle_points(ref.artist)
+        elif ref.kind == "text":
+            points = self._text_handle_points(ref.artist)
+        elif ref.kind == "line":
+            points = self._line_handle_points(ref.artist)
+        else:
+            points = self._arrow_handle_points(ref.artist)
         for name, (x, y) in points.items():
             marker = "o" if name in {"rotate", "start", "end"} else "s"
             handle = ax.plot(
@@ -935,6 +1078,33 @@ class StyleEditor(QMainWindow):
             "rotate": (float(cx), y1 + (y1 - y0) * 0.5),
         }
 
+    def _text_handle_points(self, artist: Any) -> dict[str, tuple[float, float]]:
+        x, y = artist.get_position()
+        return {"move": (float(x), float(y))}
+
+    def _line_handle_points(self, line: Any) -> dict[str, tuple[float, float]]:
+        xdata = [float(value) for value in line.get_xdata()]
+        ydata = [float(value) for value in line.get_ydata()]
+        if not xdata or not ydata:
+            return {}
+        points = {
+            "move": (sum(xdata) / len(xdata), sum(ydata) / len(ydata)),
+        }
+        if len(xdata) == 2:
+            points["start"] = (xdata[0], ydata[0])
+            points["end"] = (xdata[1], ydata[1])
+        return points
+
+    def _arrow_handle_points(self, artist: Any) -> dict[str, tuple[float, float]]:
+        props = arrow_props(artist)
+        pos_a = props["posA"]
+        pos_b = props["posB"]
+        return {
+            "start": (float(pos_a[0]), float(pos_a[1])),
+            "move": ((float(pos_a[0]) + float(pos_b[0])) / 2.0, (float(pos_a[1]) + float(pos_b[1])) / 2.0),
+            "end": (float(pos_b[0]), float(pos_b[1])),
+        }
+
     def _rotate_point(self, cx: float, cy: float, x: float, y: float, angle: float) -> tuple[float, float]:
         cos_a, sin_a = math.cos(angle), math.sin(angle)
         return cx + x * cos_a - y * sin_a, cy + x * sin_a + y * cos_a
@@ -949,7 +1119,7 @@ class StyleEditor(QMainWindow):
             return None
 
         for ref in reversed(self.refs):
-            if ref.kind in {"figure", "axes", "axis"}:
+            if ref.kind in {"figure", "axes", "axis", "text_group"}:
                 continue
             adapter = get_adapter(ref.kind)
             if adapter is not None and adapter.hit_test(ref, event, self):
@@ -1883,6 +2053,10 @@ class StyleEditor(QMainWindow):
             artist.grid(bool(props["xgrid"]), axis="x")
             artist.grid(bool(props["ygrid"]), axis="y")
         elif kind == "line":
+            if "xdata" in props and "ydata" in props:
+                artist.set_data(props["xdata"], props["ydata"])
+                artist._mve_xdata = list(props["xdata"])
+                artist._mve_ydata = list(props["ydata"])
             artist.set_color(props["color"])
             artist.set_linewidth(props["linewidth"])
             artist.set_linestyle(props["linestyle"])
@@ -1896,8 +2070,16 @@ class StyleEditor(QMainWindow):
             apply_shape_props(artist.axes, props, artist)
         elif kind == "textbox":
             apply_textbox_props(artist.axes, props, artist)
+        elif kind == "fill":
+            apply_fill_props(artist.axes, props, artist)
+        elif kind == "arrow":
+            apply_arrow_props(artist, props)
         elif kind == "text":
             artist.set_text(props["text"])
+            if "x" in props and "y" in props:
+                artist.set_position((props["x"], props["y"]))
+            if "rotation" in props:
+                artist.set_rotation(props["rotation"])
             artist.set_color(props["color"])
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])

@@ -17,6 +17,8 @@ from matplotlib.path import Path as MplPath
 
 from .inspector import iter_artist_refs
 from .snapshots import snapshot_artist
+from .adapters.arrow import apply_arrow_props
+from .fills import apply_fill_props
 from .shapes import apply_shape_props, apply_textbox_props
 
 
@@ -137,6 +139,8 @@ from matplotlib.patches import Patch
 from matplotlib.path import Path
 import numpy as np
 
+from mpl_visual_editor.adapters.arrow import apply_arrow_props
+from mpl_visual_editor.fills import apply_fill_props
 from mpl_visual_editor.shapes import apply_shape_props, apply_textbox_props
 
 MPL_VISUAL_EDITOR_SOURCE = {source_repr}
@@ -182,6 +186,8 @@ def _resolve(fig, path):
         return ax.lines[int(parts[3])]
     if target == "collections":
         return ax.collections[int(parts[3])]
+    if target == "patches":
+        return ax.patches[int(parts[3])]
     if target == "containers":
         return ax.containers[int(parts[3])]
     if target == "legend":
@@ -205,6 +211,10 @@ def apply_style(fig):
             ax = fig.axes[int(patch["path"][1])]
             apply_textbox_props(ax, props)
             continue
+        if kind == "fill" and props.get("editable_geometry"):
+            ax = fig.axes[int(patch["path"][1])]
+            apply_fill_props(ax, props)
+            continue
         artist = _resolve(fig, patch["path"])
         if artist is None:
             continue
@@ -221,6 +231,10 @@ def apply_style(fig):
             artist.grid(bool(props["xgrid"]), axis="x")
             artist.grid(bool(props["ygrid"]), axis="y")
         elif kind == "line":
+            if "xdata" in props and "ydata" in props:
+                artist.set_data(props["xdata"], props["ydata"])
+                artist._mve_xdata = list(props["xdata"])
+                artist._mve_ydata = list(props["ydata"])
             artist.set_color(props["color"])
             artist.set_linewidth(props["linewidth"])
             artist.set_linestyle(props["linestyle"])
@@ -236,6 +250,10 @@ def apply_style(fig):
             artist.set_linewidth(props["linewidth"])
             artist.set_sizes([props["size"]] * max(1, len(artist.get_offsets())))
             artist.set_alpha(props["alpha"])
+        elif kind == "fill":
+            apply_fill_props(artist.axes, props, artist)
+        elif kind == "arrow":
+            apply_arrow_props(artist, props)
         elif kind == "bar":
             artist.set_label(props["label"])
             for index, patch in enumerate(artist.patches):
@@ -248,6 +266,10 @@ def apply_style(fig):
                 _set_bar_width_centered(patch, _list_prop(props, "width", index))
         elif kind == "text":
             artist.set_text(props["text"])
+            if "x" in props and "y" in props:
+                artist.set_position((props["x"], props["y"]))
+            if "rotation" in props:
+                artist.set_rotation(props["rotation"])
             artist.set_color(props["color"])
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])

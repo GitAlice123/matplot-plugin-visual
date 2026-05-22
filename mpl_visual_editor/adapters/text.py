@@ -95,8 +95,13 @@ class TextAdapter(BaseAdapter):
 
         artist = ref.artist
         editor._add_text("Text", artist.get_text(), artist.set_text)
+        x, y = artist.get_position()
+        editor._add_float("X", float(x), lambda v: editor._set_text_position(artist, x=v), -1e12, 1e12, 0.1, decimals=4)
+        editor._add_float("Y", float(y), lambda v: editor._set_text_position(artist, y=v), -1e12, 1e12, 0.1, decimals=4)
+        editor._add_float("Rotation", float(artist.get_rotation()), artist.set_rotation, -360.0, 360.0, 1.0)
         editor._add_color("Color", artist.get_color(), artist.set_color)
         editor._add_float("Font size", artist.get_fontsize(), artist.set_fontsize, 1.0, 96.0, 1.0)
         editor._add_choice("Weight", artist.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], artist.set_fontweight)
         editor._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
+        editor._add_position_save_button("Save position")
         return True

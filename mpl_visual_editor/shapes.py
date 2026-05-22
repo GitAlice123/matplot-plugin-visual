@@ -26,6 +26,7 @@ def add_shape(ax: Any, shape_type: str, center: tuple[float, float] | None = Non
         "facecolor": "#ffffff" if shape_type not in {"line", "arrow"} else None,
         "edgecolor": "#c0392b" if shape_type == "arrow" else "#222222",
         "linewidth": 1.0,
+        "linestyle": "-",
         "alpha": 1.0,
         "mutation_scale": 10.0,
     }
@@ -76,6 +77,7 @@ def shape_props(artist: Any) -> dict[str, Any]:
         "facecolor": _color(artist.get_facecolor()) if hasattr(artist, "get_facecolor") else None,
         "edgecolor": _edgecolor(artist),
         "linewidth": float(artist.get_linewidth()) if hasattr(artist, "get_linewidth") else 1.0,
+        "linestyle": _linestyle(artist),
         "alpha": artist.get_alpha(),
         "mutation_scale": float(getattr(artist, "_mve_mutation_scale", 10.0)),
     }
@@ -206,6 +208,7 @@ def _update_shape_artist(artist: Any, props: dict[str, Any]) -> None:
     edgecolor = props.get("edgecolor", "#222222")
     facecolor = props.get("facecolor")
     linewidth = float(props.get("linewidth", 1.0))
+    linestyle = props.get("linestyle", "-")
     alpha = props.get("alpha", 1.0)
 
     if shape_type in {"line", "arrow"}:
@@ -243,6 +246,8 @@ def _update_shape_artist(artist: Any, props: dict[str, Any]) -> None:
         artist.set_edgecolor(edgecolor)
 
     artist.set_linewidth(linewidth)
+    if hasattr(artist, "set_linestyle"):
+        artist.set_linestyle(linestyle)
     artist.set_alpha(alpha)
     artist.set_visible(bool(props.get("visible", True)))
     _tag_artist(artist, "shape", props)
@@ -295,6 +300,21 @@ def _edgecolor(artist: Any) -> str | None:
     if hasattr(artist, "get_color"):
         return _color(artist.get_color())
     return None
+
+
+def _linestyle(artist: Any) -> str:
+    if not hasattr(artist, "get_linestyle"):
+        return "-"
+    value = artist.get_linestyle()
+    if value in {None, "None", "none"}:
+        return "None"
+    aliases = {
+        "solid": "-",
+        "dashed": "--",
+        "dashdot": "-.",
+        "dotted": ":",
+    }
+    return aliases.get(str(value), str(value))
 
 
 def _color(value: Any) -> str | None:
