@@ -17,7 +17,8 @@ matplotlib.use("QtAgg")
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -50,6 +51,7 @@ from .inspector import iter_artist_refs
 from .refs import ArtistRef
 from .snapshots import snapshot_artist
 from .shapes import (
+    LINE_SHAPE_TYPES,
     add_shape,
     add_textbox,
     apply_shape_props,
@@ -60,6 +62,65 @@ from .shapes import (
 )
 
 PREVIEW_DPI = 100.0
+
+INSERT_SHAPE_GROUPS = [
+    ("Lines", [("Line", "shape:line"), ("Arrow", "shape:arrow"), ("Double arrow", "shape:double_arrow")]),
+    ("Rectangles", [("Rectangle", "shape:rectangle"), ("Rounded rectangle", "shape:round_rectangle")]),
+    ("Basic shapes", [("Ellipse", "shape:ellipse"), ("Triangle", "shape:triangle"), ("Diamond", "shape:diamond")]),
+    ("Text", [("Text box", "textbox")]),
+]
+
+
+def _insert_shape_icon(tool: str, size: int = 28) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor("#2f3437"), 2.0)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(QBrush(QColor("#ffffff")))
+
+    margin = 5.0
+    left = margin
+    right = size - margin
+    top = margin
+    bottom = size - margin
+    mid = size / 2.0
+    shape_type = tool.split(":", 1)[1] if tool.startswith("shape:") else "textbox"
+
+    if shape_type in {"line", "arrow", "double_arrow"}:
+        painter.drawLine(QPointF(left, mid), QPointF(right, mid))
+        if shape_type in {"arrow", "double_arrow"}:
+            _draw_icon_arrow_head(painter, QPointF(right, mid), QPointF(right - 6.0, mid - 4.0), QPointF(right - 6.0, mid + 4.0))
+        if shape_type == "double_arrow":
+            _draw_icon_arrow_head(painter, QPointF(left, mid), QPointF(left + 6.0, mid - 4.0), QPointF(left + 6.0, mid + 4.0))
+    elif shape_type == "rectangle":
+        painter.drawRect(int(left), int(top + 2), int(right - left), int(bottom - top - 4))
+    elif shape_type == "round_rectangle":
+        painter.drawRoundedRect(int(left), int(top + 2), int(right - left), int(bottom - top - 4), 5, 5)
+    elif shape_type == "ellipse":
+        painter.drawEllipse(int(left), int(top + 2), int(right - left), int(bottom - top - 4))
+    elif shape_type == "triangle":
+        painter.drawPolygon(QPolygonF([QPointF(mid, top), QPointF(right, bottom), QPointF(left, bottom)]))
+    elif shape_type == "diamond":
+        painter.drawPolygon(QPolygonF([QPointF(mid, top), QPointF(right, mid), QPointF(mid, bottom), QPointF(left, mid)]))
+    else:
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRoundedRect(int(left), int(top + 2), int(right - left), int(bottom - top - 4), 4, 4)
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(11)
+        painter.setFont(font)
+        painter.drawText(pixmap.rect(), Qt.AlignCenter, "T")
+
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _draw_icon_arrow_head(painter: QPainter, tip: QPointF, side_a: QPointF, side_b: QPointF) -> None:
+    painter.drawLine(tip, side_a)
+    painter.drawLine(tip, side_b)
 
 
 class _AspectCanvasHost(QWidget):
@@ -360,34 +421,11 @@ class StyleEditor(QMainWindow):
 
         add_shape_button = QPushButton("Add shape")
         shape_menu = QMenu(add_shape_button)
-        shape_menu.addSection("Lines")
-        for label, tool in [
-            ("Line", "shape:line"),
-            ("Arrow", "shape:arrow"),
-        ]:
-            action = shape_menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
-        shape_menu.addSection("Rectangles")
-        for label, tool in [
-            ("Rectangle", "shape:rectangle"),
-            ("Rounded rectangle", "shape:round_rectangle"),
-        ]:
-            action = shape_menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
-        shape_menu.addSection("Basic shapes")
-        for label, tool in [
-            ("Ellipse", "shape:ellipse"),
-            ("Triangle", "shape:triangle"),
-            ("Diamond", "shape:diamond"),
-        ]:
-            action = shape_menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
-        shape_menu.addSection("Text")
-        for label, tool in [
-            ("Text box", "textbox"),
-        ]:
-            action = shape_menu.addAction(label)
-            action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
+        for section, tools in INSERT_SHAPE_GROUPS:
+            shape_menu.addSection(section)
+            for label, tool in tools:
+                action = shape_menu.addAction(_insert_shape_icon(tool), label)
+                action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
         add_shape_button.setMenu(shape_menu)
         left_layout.addWidget(add_shape_button)
 
@@ -528,7 +566,7 @@ class StyleEditor(QMainWindow):
         self._refresh_refs()
         self._select_ref_by_artist(artist)
         if self.current_ref is not None and self.current_ref.kind in {"shape", "textbox"}:
-            self._active_handle = "end" if tool.startswith("shape:") and tool.split(":", 1)[1] in {"line", "arrow"} else "se"
+            self._active_handle = "end" if tool.startswith("shape:") and tool.split(":", 1)[1] in LINE_SHAPE_TYPES else "se"
             self._drag_last_data = center
             self._draw_anchor_data = center
             self._drag_moved = False
@@ -905,7 +943,7 @@ class StyleEditor(QMainWindow):
             dx, dy = x - ox, y - oy
             local_x = dx * cos_a - dy * sin_a
             local_y = dx * sin_a + dy * cos_a
-            if props.get("type") in {"line", "arrow"}:
+            if props.get("type") in LINE_SHAPE_TYPES:
                 props["width"] = max(abs(local_x), 1e-12)
             else:
                 if handle in {"nw", "ne", "e", "se", "sw", "w"}:
@@ -1024,7 +1062,7 @@ class StyleEditor(QMainWindow):
     def _shape_handle_points(self, props: dict[str, Any]) -> dict[str, tuple[float, float]]:
         x, y = float(props["x"]), float(props["y"])
         width = float(props["width"])
-        if props.get("type") in {"line", "arrow"}:
+        if props.get("type") in LINE_SHAPE_TYPES:
             angle = math.radians(float(props.get("angle", 0.0)))
             dx = math.cos(angle) * width / 2.0
             dy = math.sin(angle) * width / 2.0
@@ -1035,7 +1073,7 @@ class StyleEditor(QMainWindow):
             }
         height = (
             float(props["height"])
-            if props.get("type") not in {"line", "arrow"}
+            if props.get("type") not in LINE_SHAPE_TYPES
             else max(float(props["width"]) * 0.2, 1e-12)
         )
         angle = math.radians(float(props.get("angle", 0.0)))

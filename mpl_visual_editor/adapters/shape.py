@@ -8,7 +8,7 @@ from typing import Any
 from matplotlib.figure import Figure
 
 from ..refs import ArtistRef
-from ..shapes import apply_shape_props, apply_textbox_props, shape_props, textbox_props
+from ..shapes import ARROW_SHAPE_TYPES, LINE_SHAPE_TYPES, apply_shape_props, apply_textbox_props, shape_props, textbox_props
 from .base import BaseAdapter
 
 
@@ -53,7 +53,7 @@ class ShapeAdapter(BaseAdapter):
     def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
         if ref.kind == "shape":
             props = shape_props(ref.artist)
-            if props.get("type") in {"line", "arrow"}:
+            if props.get("type") in LINE_SHAPE_TYPES:
                 return self._hit_test_line_shape(ref.artist, props, event)
         return super().hit_test(ref, event, editor)
 
@@ -116,13 +116,13 @@ class ShapeAdapter(BaseAdapter):
         editor._add_bool("Visible", props["visible"], lambda v: self._set_shape(artist, visible=v))
         editor._add_float("X", props["x"], lambda v: self._set_shape(artist, x=v), -1e12, 1e12, 0.1, decimals=4)
         editor._add_float("Y", props["y"], lambda v: self._set_shape(artist, y=v), -1e12, 1e12, 0.1, decimals=4)
-        if shape_type in {"line", "arrow"}:
+        if shape_type in LINE_SHAPE_TYPES:
             editor._add_float("Length", props["width"], lambda v: self._set_shape(artist, width=v), 1e-12, 1e12, 0.1, decimals=4)
             editor._add_float("Angle", props["angle"], lambda v: self._set_shape(artist, angle=v), -360.0, 360.0, 1.0)
             editor._add_color("Color", props["edgecolor"], lambda v: self._set_shape(artist, edgecolor=v))
             editor._add_float("Line width", props["linewidth"], lambda v: self._set_shape(artist, linewidth=v), 0.0, 50.0, 0.25)
             editor._add_choice("Line style", props["linestyle"], ["-", "--", "-.", ":", "None"], lambda v: self._set_shape(artist, linestyle=v))
-            if shape_type == "arrow":
+            if shape_type in ARROW_SHAPE_TYPES:
                 editor._add_float("Head size", props["mutation_scale"], lambda v: self._set_shape(artist, mutation_scale=v), 1.0, 200.0, 1.0)
         else:
             editor._add_float("Width", props["width"], lambda v: self._set_shape(artist, width=v), 1e-12, 1e12, 0.1, decimals=4)

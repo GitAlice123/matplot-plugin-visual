@@ -9,6 +9,9 @@ from typing import Any
 from matplotlib.colors import to_hex
 from matplotlib.patches import Ellipse, FancyArrowPatch, FancyBboxPatch, Polygon, Rectangle
 
+LINE_SHAPE_TYPES = {"line", "arrow", "double_arrow"}
+ARROW_SHAPE_TYPES = {"arrow", "double_arrow"}
+
 
 def add_shape(ax: Any, shape_type: str, center: tuple[float, float] | None = None) -> Any:
     x, y, width, height = _default_geometry(ax)
@@ -23,8 +26,8 @@ def add_shape(ax: Any, shape_type: str, center: tuple[float, float] | None = Non
         "width": width,
         "height": height,
         "angle": 0.0,
-        "facecolor": "#ffffff" if shape_type not in {"line", "arrow"} else None,
-        "edgecolor": "#c0392b" if shape_type == "arrow" else "#222222",
+        "facecolor": "#ffffff" if shape_type not in LINE_SHAPE_TYPES else None,
+        "edgecolor": "#c0392b" if shape_type in ARROW_SHAPE_TYPES else "#222222",
         "linewidth": 1.0,
         "linestyle": "-",
         "alpha": 1.0,
@@ -175,8 +178,8 @@ def _create_shape(ax: Any, props: dict[str, Any]) -> Any:
     shape_type = props.get("type", "rectangle")
     if shape_type == "ellipse":
         artist = Ellipse((0.0, 0.0), 1.0, 1.0, clip_on=False, zorder=1000)
-    elif shape_type in {"line", "arrow"}:
-        arrowstyle = "->" if shape_type == "arrow" else "-"
+    elif shape_type in LINE_SHAPE_TYPES:
+        arrowstyle = {"arrow": "->", "double_arrow": "<->"}.get(shape_type, "-")
         artist = FancyArrowPatch((0.0, 0.0), (1.0, 0.0), arrowstyle=arrowstyle, clip_on=False, zorder=1000)
     elif shape_type in {"triangle", "diamond"}:
         artist = Polygon([[0.0, 0.0]], closed=True, clip_on=False, zorder=1000)
@@ -211,7 +214,7 @@ def _update_shape_artist(artist: Any, props: dict[str, Any]) -> None:
     linestyle = props.get("linestyle", "-")
     alpha = props.get("alpha", 1.0)
 
-    if shape_type in {"line", "arrow"}:
+    if shape_type in LINE_SHAPE_TYPES:
         radians = math.radians(angle)
         dx = math.cos(radians) * width / 2.0
         dy = math.sin(radians) * width / 2.0
