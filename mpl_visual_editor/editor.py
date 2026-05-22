@@ -15,10 +15,8 @@ import matplotlib
 
 matplotlib.use("QtAgg")
 
-import matplotlib.patheffects as path_effects
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
@@ -448,77 +446,14 @@ class StyleEditor(QMainWindow):
             if adapter is not None and adapter.hit_test(ref, event, self):
                 return ref
 
-        axis_ref = self._axis_ref_at_event(event)
-        if axis_ref is not None:
-            return axis_ref
-
-        if event.inaxes is not None:
+        for kind in ["axis", "axes"]:
             for ref in self.refs:
-                if ref.kind == "axes" and ref.artist is event.inaxes:
+                if ref.kind != kind:
+                    continue
+                adapter = get_adapter(ref.kind)
+                if adapter is not None and adapter.hit_test(ref, event, self):
                     return ref
         return None
-
-    def _axis_ref_at_event(self, event: Any) -> ArtistRef | None:
-        if event.x is None or event.y is None:
-            return None
-
-        x = float(event.x)
-        y = float(event.y)
-        for ref in self.refs:
-            if ref.kind != "axis":
-                continue
-            if self._axis_artist_contains(ref, event, x, y):
-                return ref
-
-        pad = 34
-
-        for ax in self.fig.axes:
-            bbox = ax.bbox
-            inside_expanded = (
-                bbox.x0 - pad <= x <= bbox.x1 + pad
-                and bbox.y0 - pad <= y <= bbox.y1 + pad
-            )
-            if not inside_expanded:
-                continue
-
-            near_x_axis = bbox.x0 - pad <= x <= bbox.x1 + pad and (
-                abs(y - bbox.y0) <= pad or abs(y - bbox.y1) <= pad
-            )
-            near_y_axis = bbox.y0 - pad <= y <= bbox.y1 + pad and (
-                abs(x - bbox.x0) <= pad or abs(x - bbox.x1) <= pad
-            )
-            if not (near_x_axis or near_y_axis):
-                continue
-
-            target = "xaxis" if near_x_axis and not near_y_axis else "yaxis"
-            if near_x_axis and near_y_axis:
-                distance_x = min(abs(y - bbox.y0), abs(y - bbox.y1))
-                distance_y = min(abs(x - bbox.x0), abs(x - bbox.x1))
-                target = "xaxis" if distance_x <= distance_y else "yaxis"
-
-            for ref in self.refs:
-                if ref.kind == "axis" and ref.artist.axes is ax and ref.path[2] == target:
-                    return ref
-        return None
-
-    def _axis_artist_contains(self, ref: ArtistRef, event: Any, x: float, y: float) -> bool:
-        renderer = self.canvas.get_renderer()
-        for artist in self._axis_highlight_artists(ref):
-            if hasattr(artist, "get_visible") and not artist.get_visible():
-                continue
-            try:
-                contains, _details = artist.contains(event)
-                if contains:
-                    return True
-            except Exception:
-                pass
-            try:
-                bbox = artist.get_window_extent(renderer=renderer).expanded(1.4, 1.8)
-                if bbox.contains(x, y):
-                    return True
-            except Exception:
-                pass
-        return False
 
     def _select_ref(self, ref: ArtistRef) -> None:
         for row in range(self.object_list.count()):
@@ -545,72 +480,15 @@ class StyleEditor(QMainWindow):
             self.canvas.draw_idle()
 
     def _apply_hover_highlight(self, ref: ArtistRef) -> dict[str, Any]:
-        artist = ref.artist
-        if ref.kind not in {"axis", "axes"}:
-            adapter = get_adapter(ref.kind)
-            if adapter is not None:
-                return adapter.highlight(ref, self)
-            return {"kind": ref.kind}
-
-        state: dict[str, Any] = {"kind": ref.kind}
-        if ref.kind == "axis":
-            state["axis_artists"] = []
-            for axis_artist in self._axis_highlight_artists(ref):
-                if hasattr(axis_artist, "get_path_effects") and hasattr(axis_artist, "set_path_effects"):
-                    state["axis_artists"].append((axis_artist, axis_artist.get_path_effects()))
-                    axis_artist.set_path_effects(
-                        [
-                            path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
-                            path_effects.Normal(),
-                        ]
-                    )
-        elif ref.kind == "axes":
-            overlay = Rectangle(
-                (0, 0),
-                1,
-                1,
-                transform=artist.transAxes,
-                fill=False,
-                edgecolor="#ffcc00",
-                linewidth=2.5,
-                linestyle="--",
-                zorder=1_000_000,
-                clip_on=False,
-            )
-            artist.add_patch(overlay)
-            state["overlay"] = overlay
-
-        return state
+        adapter = get_adapter(ref.kind)
+        if adapter is not None:
+            return adapter.highlight(ref, self)
+        return {"kind": ref.kind}
 
     def _restore_hover_highlight(self, ref: ArtistRef, state: dict[str, Any]) -> None:
-        if ref.kind not in {"axis", "axes"}:
-            adapter = get_adapter(ref.kind)
-            if adapter is not None:
-                adapter.restore_highlight(ref, self, state)
-            return
-
-        if ref.kind == "axis" and "axis_artists" in state:
-            for axis_artist, old_effects in state["axis_artists"]:
-                axis_artist.set_path_effects(old_effects)
-        elif ref.kind == "axes" and "overlay" in state:
-            self._remove_overlay(state["overlay"])
-
-    def _axis_highlight_artists(self, ref: ArtistRef) -> list[Any]:
-        axis = ref.artist
-        artists: list[Any] = [axis.label]
-        for tick in axis.get_major_ticks():
-            artists.extend([tick.tick1line, tick.tick2line, tick.label1, tick.label2])
-        return artists
-
-    def _remove_overlay(self, overlay: Any) -> None:
-        try:
-            overlay.remove()
-        except NotImplementedError:
-            if overlay in self.fig.artists:
-                self.fig.artists.remove(overlay)
-            for ax in self.fig.axes:
-                if overlay in ax.patches:
-                    ax.patches.remove(overlay)
+        adapter = get_adapter(ref.kind)
+        if adapter is not None:
+            adapter.restore_highlight(ref, self, state)
 
     def _build_form(self, ref: ArtistRef) -> None:
         self._building_form = True
