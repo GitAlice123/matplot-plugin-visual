@@ -544,6 +544,7 @@ class StyleEditor(QMainWindow):
         widget = QLineEdit(str(value))
         widget._mve_commit = lambda: setter(widget.text())
         save_button = self._add_property_row(label, widget)
+        widget.textEdited.connect(lambda _text: self._mark_pending_dirty(save_button))
         widget.editingFinished.connect(lambda: self._apply(lambda: setter(widget.text()), save_button))
 
     def _add_float(
@@ -1146,6 +1147,19 @@ class StyleEditor(QMainWindow):
             save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
         self.status.setText("Preview updated. Click Save to keep it.")
 
+    def _mark_pending_dirty(self, save_button: QPushButton | None = None) -> None:
+        if self._building_form or self._suppress_dirty:
+            return
+        self._dirty = True
+        if save_button is not None and hasattr(save_button, "_mve_editor_widget"):
+            widget = getattr(save_button, "_mve_editor_widget", None)
+            if isinstance(widget, QWidget):
+                self._dirty_widgets.add(widget)
+        if save_button is not None:
+            save_button.setEnabled(True)
+            save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
+        self.status.setText("Text changed. Press Enter or click Save to apply it.")
+
     def _mark_position_dirty(self) -> None:
         if self._building_form or self._suppress_dirty:
             return
@@ -1359,9 +1373,46 @@ class StyleEditor(QMainWindow):
             self._suppress_dirty = False
 
     def _redraw(self, message: str) -> None:
+        view_state = self._capture_preview_view()
         self._fit_figure_to_canvas(adjust_layout=True)
+        self._restore_preview_view(view_state)
         self.canvas.draw_idle()
+        QTimer.singleShot(0, lambda: self._restore_preview_view(view_state))
         self.status.setText(message)
+
+    def _capture_preview_view(self) -> dict[str, float] | None:
+        if not hasattr(self, "canvas_scroll"):
+            return None
+        hbar = self.canvas_scroll.horizontalScrollBar()
+        vbar = self.canvas_scroll.verticalScrollBar()
+        return {
+            "h_value": float(hbar.value()),
+            "v_value": float(vbar.value()),
+            "h_ratio": self._scroll_ratio(hbar),
+            "v_ratio": self._scroll_ratio(vbar),
+        }
+
+    def _restore_preview_view(self, state: dict[str, float] | None) -> None:
+        if state is None or not hasattr(self, "canvas_scroll"):
+            return
+        hbar = self.canvas_scroll.horizontalScrollBar()
+        vbar = self.canvas_scroll.verticalScrollBar()
+        self._restore_scrollbar(hbar, state["h_value"], state["h_ratio"])
+        self._restore_scrollbar(vbar, state["v_value"], state["v_ratio"])
+
+    def _scroll_ratio(self, scrollbar: Any) -> float:
+        maximum = scrollbar.maximum()
+        if maximum <= 0:
+            return 0.0
+        return float(scrollbar.value()) / float(maximum)
+
+    def _restore_scrollbar(self, scrollbar: Any, value: float, ratio: float) -> None:
+        maximum = scrollbar.maximum()
+        if maximum <= 0:
+            scrollbar.setValue(0)
+            return
+        target = value if value <= maximum else ratio * maximum
+        scrollbar.setValue(int(round(target)))
 
     def _fit_figure_to_canvas(self, adjust_layout: bool = False) -> None:
         if self._fit_in_progress:
