@@ -6,6 +6,7 @@ from pathlib import Path
 from pprint import pformat
 from typing import Any
 import math
+import warnings
 
 from matplotlib.colors import to_hex
 from matplotlib.figure import Figure
@@ -81,6 +82,17 @@ def _snapshot(
             "fontweight": artist.get_fontweight(),
             "fontstyle": artist.get_fontstyle(),
         }
+    elif kind == "text_group":
+        texts = [text for text in artist if hasattr(text, "get_text")]
+        if texts:
+            first = texts[0]
+            props = {
+                "count": len(texts),
+                "color": _color(first.get_color()),
+                "fontsize": float(first.get_fontsize()),
+                "fontweight": first.get_fontweight(),
+                "fontstyle": first.get_fontstyle(),
+            }
     elif kind == "axis":
         axis_name = str(artist_path[2])[0]
         ax = artist.axes
@@ -127,6 +139,7 @@ def _snapshot(
         props = {
             "visible": bool(artist.get_visible()),
             "fontsize": _legend_fontsize(artist),
+            "handle_specs": _legend_handle_specs(artist),
             "loc": getattr(artist, "_mve_loc", getattr(artist, "_loc", "best")),
             "bbox_to_anchor": getattr(artist, "_mve_bbox_to_anchor", None),
             "ncols": getattr(artist, "_ncols", 1),
@@ -175,6 +188,42 @@ def _legend_fontsize(legend: Any) -> float | None:
     if not texts:
         return None
     return float(texts[0].get_fontsize())
+
+
+def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
+    handles = getattr(legend, "legend_handles", None)
+    if handles is None:
+        handles = getattr(legend, "legendHandles", [])
+    labels = [text.get_text() for text in legend.get_texts()]
+    specs: list[dict[str, Any]] = []
+    for index, handle in enumerate(handles):
+        label = labels[index] if index < len(labels) else getattr(handle, "get_label", lambda: "")()
+        if hasattr(handle, "get_facecolor") and hasattr(handle, "get_hatch"):
+            specs.append(
+                {
+                    "kind": "patch",
+                    "label": label,
+                    "facecolor": _color(handle.get_facecolor()),
+                    "edgecolor": _color(handle.get_edgecolor()) if hasattr(handle, "get_edgecolor") else None,
+                    "linewidth": float(handle.get_linewidth()) if hasattr(handle, "get_linewidth") else 1.0,
+                    "hatch": handle.get_hatch() or "",
+                    "alpha": handle.get_alpha(),
+                }
+            )
+        elif hasattr(handle, "get_color") and hasattr(handle, "get_linestyle"):
+            specs.append(
+                {
+                    "kind": "line",
+                    "label": label,
+                    "color": _color(handle.get_color()),
+                    "linewidth": float(handle.get_linewidth()) if hasattr(handle, "get_linewidth") else 1.0,
+                    "linestyle": handle.get_linestyle(),
+                    "marker": handle.get_marker() if hasattr(handle, "get_marker") else "None",
+                    "markersize": float(handle.get_markersize()) if hasattr(handle, "get_markersize") else 6.0,
+                    "alpha": handle.get_alpha(),
+                }
+            )
+    return specs
 
 
 def _axis_tick_start(axis: Any) -> float:
@@ -246,6 +295,10 @@ Import this file after your original plotting code and call apply_style(fig).
 """
 
 import math
+import warnings
+
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 
 MPL_VISUAL_EDITOR_SOURCE = {source_repr}
 
@@ -266,6 +319,10 @@ def _resolve(fig, path):
         return ax.xaxis.label
     if target == "ylabel":
         return ax.yaxis.label
+    if target == "texts":
+        return ax.texts[int(parts[3])]
+    if target == "texts_group":
+        return tuple(ax.texts)
     if target == "xaxis":
         return ax.xaxis
     if target == "yaxis":
@@ -326,6 +383,12 @@ def apply_style(fig):
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])
             artist.set_fontstyle(props["fontstyle"])
+        elif kind == "text_group":
+            for text in artist:
+                text.set_color(props["color"])
+                text.set_fontsize(props["fontsize"])
+                text.set_fontweight(props["fontweight"])
+                text.set_fontstyle(props["fontstyle"])
         elif kind == "axis":
             ax = artist.axes
             axis_name = props["axis"]
@@ -347,7 +410,9 @@ def apply_style(fig):
                 )
         elif kind == "legend":
             ax = artist.axes
+            handles = _legend_handles_from_specs(props.get("handle_specs", []))
             artist = ax.legend(
+                handles=handles or None,
                 loc=props["loc"],
                 bbox_to_anchor=props["bbox_to_anchor"],
                 ncols=props["ncols"],
@@ -375,7 +440,9 @@ def apply_style(fig):
             artist.set_linewidth(props["linewidth"])
 
     try:
-        fig.tight_layout()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            fig.tight_layout()
     except Exception:
         pass
     fig.canvas.draw_idle()
@@ -436,6 +503,37 @@ def _set_bar_width_centered(patch, width):
     signed_width = math.copysign(width, old_width if old_width else 1.0)
     patch.set_width(signed_width)
     patch.set_x(center - signed_width / 2.0)
+
+
+def _legend_handles_from_specs(specs):
+    handles = []
+    for spec in specs:
+        if spec.get("kind") == "patch":
+            handles.append(
+                Patch(
+                    facecolor=spec.get("facecolor"),
+                    edgecolor=spec.get("edgecolor"),
+                    linewidth=spec.get("linewidth", 1.0),
+                    hatch=spec.get("hatch", ""),
+                    label=spec.get("label", ""),
+                    alpha=spec.get("alpha"),
+                )
+            )
+        elif spec.get("kind") == "line":
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    color=spec.get("color"),
+                    linewidth=spec.get("linewidth", 1.0),
+                    linestyle=spec.get("linestyle", "-"),
+                    marker=spec.get("marker", "None"),
+                    markersize=spec.get("markersize", 6.0),
+                    label=spec.get("label", ""),
+                    alpha=spec.get("alpha"),
+                )
+            )
+    return handles
 
 
 def _apply_axis_tick_labels(axis, fontsize, color, weight, style, rotation):

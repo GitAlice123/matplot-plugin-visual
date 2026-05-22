@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import importlib.util
 import math
 import sys
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,7 +19,7 @@ import matplotlib.patheffects as path_effects
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -42,7 +44,9 @@ from PySide6.QtWidgets import (
 
 from .exporter import export_style
 from .exporter import _snapshot as snapshot_artist
-from .inspector import ArtistRef, iter_artist_refs
+from .adapters.registry import get_adapter
+from .inspector import iter_artist_refs
+from .refs import ArtistRef
 
 
 class _AspectCanvasHost(QWidget):
@@ -55,6 +59,7 @@ class _AspectCanvasHost(QWidget):
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
         self.editor._update_canvas_display_size()
+        self.editor.canvas.draw_idle()
 
 
 def edit(
@@ -173,6 +178,12 @@ def _sanitize_legacy_axis_patches(module: Any) -> None:
     has_legacy_axis_ticks = False
     has_legacy_axis_labels = False
     for patch in patches:
+        if isinstance(patch, dict) and patch.get("kind") == "axes":
+            props = patch.get("props")
+            if isinstance(props, dict):
+                props.pop("position", None)
+            sanitized_patches.append(patch)
+            continue
         if not isinstance(patch, dict) or patch.get("kind") != "axis":
             sanitized_patches.append(patch)
             continue
@@ -229,12 +240,15 @@ class StyleEditor(QMainWindow):
         self._position_save_button: QPushButton | None = None
         self._legend_press_xy: tuple[float, float] | None = None
         self._legend_position_dirty = False
+        self._fit_in_progress = False
+        self._base_subplotpars: tuple[float, float, float, float] | None = None
 
         self.setWindowTitle("Matplotlib Visual Style Editor")
         self.resize(1180, 760)
 
         self.canvas = FigureCanvasQTAgg(fig)
-        self.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.canvas.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.canvas.setMinimumSize(1, 1)
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.canvas_host = _AspectCanvasHost(self)
         self.object_list = QListWidget()
@@ -253,6 +267,7 @@ class StyleEditor(QMainWindow):
                 self.object_list.setCurrentRow(0)
             finally:
                 self._selecting_programmatically = False
+        QTimer.singleShot(0, lambda: self._fit_figure_to_canvas(adjust_layout=True))
 
     def _build_ui(self) -> None:
         left_panel = QWidget()
@@ -291,7 +306,7 @@ class StyleEditor(QMainWindow):
         plot_layout.setContentsMargins(0, 0, 0, 0)
         plot_layout.addWidget(self.toolbar)
         canvas_host_layout = QVBoxLayout(self.canvas_host)
-        canvas_host_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_host_layout.setContentsMargins(24, 24, 24, 24)
         canvas_host_layout.addWidget(self.canvas, 0, Qt.AlignCenter)
         plot_layout.addWidget(self.canvas_host, 1)
 
@@ -322,10 +337,16 @@ class StyleEditor(QMainWindow):
                 artist.set_picker(8)
             elif ref.kind == "text" and hasattr(artist, "set_picker"):
                 artist.set_picker(True)
+            elif ref.kind == "text_group":
+                for text in artist:
+                    if hasattr(text, "set_picker"):
+                        text.set_picker(True)
             elif ref.kind == "bar":
                 for patch in artist.patches:
                     if hasattr(patch, "set_picker"):
                         patch.set_picker(True)
+            elif ref.kind == "unsupported" and hasattr(artist, "set_picker"):
+                artist.set_picker(True)
 
     def _refresh_refs(self) -> None:
         self.pinned_ref = None
@@ -426,6 +447,9 @@ class StyleEditor(QMainWindow):
             if ref.kind == "bar":
                 if self._bar_contains(ref, event):
                     return ref
+            elif ref.kind == "text_group":
+                if self._text_group_contains(ref, event):
+                    return ref
             elif self._artist_contains(ref.artist, event):
                 return ref
 
@@ -513,6 +537,9 @@ class StyleEditor(QMainWindow):
                 return True
         return False
 
+    def _text_group_contains(self, ref: ArtistRef, event: Any) -> bool:
+        return any(self._artist_contains(text, event) for text in ref.artist)
+
     def _artist_contains(self, artist: Any, event: Any) -> bool:
         if hasattr(artist, "get_visible") and not artist.get_visible():
             return False
@@ -581,6 +608,24 @@ class StyleEditor(QMainWindow):
                     )
                 if hasattr(patch, "set_zorder") and patch_state["zorder"] is not None:
                     patch.set_zorder(float(patch_state["zorder"]) + 1000)
+        elif ref.kind == "text_group":
+            state["texts"] = []
+            for text in artist:
+                text_state = {
+                    "text": text,
+                    "path_effects": text.get_path_effects() if hasattr(text, "get_path_effects") else None,
+                    "zorder": text.get_zorder() if hasattr(text, "get_zorder") else None,
+                }
+                state["texts"].append(text_state)
+                if hasattr(text, "set_path_effects"):
+                    text.set_path_effects(
+                        [
+                            path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
+                            path_effects.Normal(),
+                        ]
+                    )
+                if hasattr(text, "set_zorder") and text_state["zorder"] is not None:
+                    text.set_zorder(float(text_state["zorder"]) + 1000)
         elif ref.kind == "legend":
             frame = artist.get_frame()
             state["frame"] = {
@@ -636,6 +681,13 @@ class StyleEditor(QMainWindow):
                     patch.set_path_effects(patch_state["path_effects"])
                 if patch_state["zorder"] is not None:
                     patch.set_zorder(patch_state["zorder"])
+        elif ref.kind == "text_group" and "texts" in state:
+            for text_state in state["texts"]:
+                text = text_state["text"]
+                if text_state["path_effects"] is not None:
+                    text.set_path_effects(text_state["path_effects"])
+                if text_state["zorder"] is not None:
+                    text.set_zorder(text_state["zorder"])
         elif ref.kind == "legend" and "frame" in state:
             frame = artist.get_frame()
             frame_state = state["frame"]
@@ -716,6 +768,16 @@ class StyleEditor(QMainWindow):
             self._add_float("Font size", artist.get_fontsize(), artist.set_fontsize, 1.0, 96.0, 1.0)
             self._add_choice("Weight", artist.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], artist.set_fontweight)
             self._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
+        elif ref.kind == "text_group":
+            first_text = self._first_text_in_group(artist)
+            if first_text is None:
+                self.form.addRow(QLabel("This text group is empty."))
+            else:
+                self.form.addRow(QLabel(f"{len(artist)} text artists will be updated together."))
+                self._add_color("Color", first_text.get_color(), lambda v: self._set_text_group_color(artist, v))
+                self._add_float("Font size", first_text.get_fontsize(), lambda v: self._set_text_group_fontsize(artist, v), 1.0, 160.0, 1.0)
+                self._add_choice("Weight", first_text.get_fontweight(), ["normal", "bold", "light", "semibold", "heavy"], lambda v: self._set_text_group_fontweight(artist, v))
+                self._add_choice("Style", first_text.get_fontstyle(), ["normal", "italic", "oblique"], lambda v: self._set_text_group_fontstyle(artist, v))
         elif ref.kind == "axis":
             axis_name = str(ref.path[2])[0]
             ax = artist.axes
@@ -730,7 +792,8 @@ class StyleEditor(QMainWindow):
             self._add_choice("Tick label style", self._axis_tick_label_prop(artist, "fontstyle", "normal"), ["normal", "italic", "oblique"], lambda v: self._apply_axis_tick_labels(artist, style=v))
             self._add_float("Tick label rotation", self._axis_tick_label_prop(artist, "rotation", 0.0), lambda v: self._apply_axis_tick_labels(artist, rotation=v), -180.0, 180.0, 5.0, decimals=1)
         elif ref.kind == "legend":
-            artist.set_draggable(True, use_blit=False)
+            self._ensure_legend_axes_anchor(artist)
+            artist.set_draggable(True, use_blit=False, update="bbox")
             frame = artist.get_frame()
             texts = artist.get_texts()
             fontsize = texts[0].get_fontsize() if texts else 10
@@ -749,6 +812,14 @@ class StyleEditor(QMainWindow):
             self._add_bool("Visible", artist.get_visible(), artist.set_visible)
             self._add_color("Color", artist.get_edgecolor(), artist.set_edgecolor)
             self._add_float("Line width", artist.get_linewidth(), artist.set_linewidth, 0.0, 20.0, 0.25)
+        elif ref.kind == "unsupported":
+            adapter = get_adapter("unsupported")
+            suggested = adapter.suggested_adapter(artist) if adapter is not None else f"{type(artist).__name__}Adapter"
+            self.form.addRow(QLabel("This artist is detected but not editable yet."))
+            self.form.addRow("Artist type", QLabel(type(artist).__name__))
+            self.form.addRow("Editable", QLabel("No"))
+            self.form.addRow("Reason", QLabel("no adapter registered"))
+            self.form.addRow("Suggested adapter", QLabel(suggested))
         else:
             self.form.addRow(QLabel("No editor for this artist type yet."))
 
@@ -912,7 +983,7 @@ class StyleEditor(QMainWindow):
         target_width = max(1, target_width)
         target_height = max(1, target_height)
         if self.canvas.width() != target_width or self.canvas.height() != target_height:
-            self.canvas.setFixedSize(target_width, target_height)
+            self.canvas.setMaximumSize(target_width, target_height)
             self.canvas.resize(target_width, target_height)
 
     def _set_axis_scale(self, axis: Any, axis_name: str, scale: str) -> None:
@@ -979,6 +1050,28 @@ class StyleEditor(QMainWindow):
         signed_width = math.copysign(width, old_width if old_width else 1.0)
         patch.set_width(signed_width)
         patch.set_x(center - signed_width / 2.0)
+
+    def _first_text_in_group(self, texts: Any) -> Any | None:
+        for text in texts:
+            if hasattr(text, "get_text"):
+                return text
+        return None
+
+    def _set_text_group_color(self, texts: Any, color: str) -> None:
+        for text in texts:
+            text.set_color(color)
+
+    def _set_text_group_fontsize(self, texts: Any, fontsize: float) -> None:
+        for text in texts:
+            text.set_fontsize(float(fontsize))
+
+    def _set_text_group_fontweight(self, texts: Any, weight: str) -> None:
+        for text in texts:
+            text.set_fontweight(weight)
+
+    def _set_text_group_fontstyle(self, texts: Any, style: str) -> None:
+        for text in texts:
+            text.set_fontstyle(style)
 
     def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float) -> None:
         interval = float(interval)
@@ -1124,6 +1217,10 @@ class StyleEditor(QMainWindow):
             props.update(changes)
             if props.get("bbox_to_anchor") is None:
                 props.pop("bbox_to_anchor", None)
+            handles, labels = self._legend_handles_labels(legend)
+            if handles and labels:
+                props["handles"] = [self._clone_legend_handle(handle) for handle in handles]
+                props["labels"] = labels
 
             visible = legend.get_visible()
             frame_alpha = frame.get_alpha()
@@ -1133,7 +1230,7 @@ class StyleEditor(QMainWindow):
 
             new_legend = ax.legend(**props)
             new_legend.set_visible(visible)
-            new_legend.set_draggable(draggable, use_blit=False)
+            new_legend.set_draggable(draggable, use_blit=False, update="bbox")
             new_frame = new_legend.get_frame()
             new_frame.set_alpha(frame_alpha)
             new_frame.set_facecolor(facecolor)
@@ -1149,6 +1246,24 @@ class StyleEditor(QMainWindow):
         finally:
             self._rebuilding_legend = False
 
+    def _legend_handles_labels(self, legend: Any) -> tuple[list[Any], list[str]]:
+        handles = getattr(legend, "legend_handles", None)
+        if handles is None:
+            handles = getattr(legend, "legendHandles", [])
+        labels = [text.get_text() for text in legend.get_texts()]
+        return list(handles), labels
+
+    def _clone_legend_handle(self, handle: Any) -> Any:
+        try:
+            cloned = copy.copy(handle)
+        except Exception:
+            return handle
+        if hasattr(cloned, "axes"):
+            cloned.axes = None
+        if hasattr(cloned, "figure"):
+            cloned.figure = None
+        return cloned
+
     def _capture_current_legend_position(self, legend: Any) -> None:
         ax = legend.axes
         self.canvas.draw()
@@ -1161,6 +1276,21 @@ class StyleEditor(QMainWindow):
             bbox_to_anchor=(axes_bbox.x0, axes_bbox.y1),
             borderaxespad=0.0,
         )
+
+    def _ensure_legend_axes_anchor(self, legend: Any) -> None:
+        if hasattr(legend, "_mve_bbox_to_anchor"):
+            return
+        ax = legend.axes
+        try:
+            self.canvas.draw()
+            renderer = self.canvas.get_renderer()
+            bbox = legend.get_window_extent(renderer=renderer)
+            axes_bbox = bbox.transformed(ax.transAxes.inverted())
+        except Exception:
+            return
+        legend._mve_bbox_to_anchor = (float(axes_bbox.x0), float(axes_bbox.y1))
+        legend._mve_loc = "upper left"
+        legend.borderaxespad = 0.0
 
     def _replace_current_legend_ref(self, legend: Any) -> None:
         self._clear_hover_highlight(redraw=False)
@@ -1417,6 +1547,11 @@ class StyleEditor(QMainWindow):
             artist.set_fontsize(props["fontsize"])
             artist.set_fontweight(props["fontweight"])
             artist.set_fontstyle(props["fontstyle"])
+        elif kind == "text_group":
+            self._set_text_group_color(artist, props["color"])
+            self._set_text_group_fontsize(artist, props["fontsize"])
+            self._set_text_group_fontweight(artist, props["fontweight"])
+            self._set_text_group_fontstyle(artist, props["fontstyle"])
         elif kind == "axis":
             axis_name = props["axis"]
             self._set_axis_scale(artist, axis_name, props["scale"])
@@ -1486,14 +1621,41 @@ class StyleEditor(QMainWindow):
             self._suppress_dirty = False
 
     def _redraw(self, message: str) -> None:
-        self._fit_figure_to_canvas()
+        self._fit_figure_to_canvas(adjust_layout=True)
         self.canvas.draw_idle()
         self.status.setText(message)
 
-    def _fit_figure_to_canvas(self) -> None:
-        self._enforce_saved_figure_size()
+    def _fit_figure_to_canvas(self, adjust_layout: bool = False) -> None:
+        if self._fit_in_progress:
+            return
+        self._fit_in_progress = True
         try:
-            self.fig.tight_layout()
+            self._enforce_saved_figure_size()
+            if adjust_layout:
+                if self._base_subplotpars is None:
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", UserWarning)
+                            self.fig.tight_layout()
+                    except Exception:
+                        pass
+                    self._capture_base_subplotpars()
+                else:
+                    self._restore_base_subplotpars()
+            self._update_canvas_display_size()
+        finally:
+            self._fit_in_progress = False
+
+    def _capture_base_subplotpars(self) -> tuple[float, float, float, float]:
+        if self._base_subplotpars is None:
+            params = self.fig.subplotpars
+            self._base_subplotpars = (params.left, params.right, params.bottom, params.top)
+        return self._base_subplotpars
+
+    def _restore_base_subplotpars(self) -> None:
+        left, right, bottom, top = self._capture_base_subplotpars()
+        try:
+            self.fig.subplots_adjust(left=left, right=right, bottom=bottom, top=top)
         except Exception:
             pass
 
@@ -1601,6 +1763,9 @@ class StyleEditor(QMainWindow):
         artist = ref.artist
         if ref.kind == "text":
             artist.set_text("")
+        elif ref.kind == "text_group":
+            for text in artist:
+                text.set_text("")
         elif ref.kind == "line":
             artist.remove()
         elif ref.kind == "bar":

@@ -60,8 +60,12 @@ exports a replayable patch.
 - Line color, width, style, marker, marker size, alpha, label
 - Bar series visibility, label, fill color, edge color, edge width, alpha, hatch, width
 - Text content, color, size, weight, style
+- Ordinary `ax.text(...)` labels, such as values above bars, including group
+  style controls for shared font/color/weight/style changes
 - Legend visibility, font size, frame, frame alpha, frame colors
 - Spine visibility, color, width
+- Unsupported visible artists are listed as read-only `Unsupported: TypeName`
+  entries so you can tell whether an object was detected but lacks an adapter.
 
 ## Install
 
@@ -87,14 +91,34 @@ mpl_visual_editor/
     editor.py
     inspector.py
     exporter.py
+    refs.py
+    adapters/
+        base.py
+        registry.py
+        figure.py
+        axes.py
+        axis.py
+        text.py
+        line.py
+        bar.py
+        legend.py
+        spine.py
+        unsupported.py
 examples/
     demo_basic.py
 README.md
 requirements.txt
 ```
 
+## Adapter architecture
+
+The inspector uses artist adapters instead of a single growing `if/elif` chain.
+Each adapter discovers one family of Matplotlib objects and returns stable
+`ArtistRef` paths. New component support should be added by creating another
+adapter, then wiring its form/edit/export behavior through the same registry.
+
 ## Notes
 
 This is intentionally small. It favors a clear object inspector and exporter
-over broad artist coverage. Future versions can add image artists, patches,
-tick styling, colormaps, and safer object identity matching.
+over broad artist coverage. Future versions can add scatter, errorbar,
+colorbar, image artists, patches, colormaps, and safer object identity matching.

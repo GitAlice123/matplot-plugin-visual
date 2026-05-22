@@ -1,13 +1,13 @@
 """Figure inspection helpers for the visual editor.
 
-The first prototype intentionally supports common Matplotlib artists only:
-axes, lines, text labels, legends, and spines. Each editable target is addressed
-by a small, stable path that can be replayed by the exporter.
+The inspector is now registry-backed: each supported Matplotlib object type is
+discovered by an adapter, while visible unclaimed artists are reported as
+``unsupported`` so product users can see what exists even before editing support
+is implemented.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Iterable
 
 from matplotlib.axes import Axes
@@ -17,110 +17,14 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.text import Text
 
-
-@dataclass(frozen=True)
-class ArtistRef:
-    """An editable Matplotlib object discovered in a figure."""
-
-    label: str
-    kind: str
-    path: tuple[Any, ...]
-    artist: Any
+from .adapters.registry import inspect_figure
+from .refs import ArtistRef
 
 
 def iter_artist_refs(fig: Figure) -> list[ArtistRef]:
-    """Return editable artists in a predictable order."""
+    """Return artists in a predictable, adapter-defined order."""
 
-    refs: list[ArtistRef] = [ArtistRef("Figure", "figure", ("figure",), fig)]
-    for ax_index, ax in enumerate(fig.axes):
-        refs.append(ArtistRef(f"Axes {ax_index}", "axes", ("axes", ax_index), ax))
-
-        title = ax.title
-        refs.append(
-            ArtistRef(
-                f"Axes {ax_index} / Title",
-                "text",
-                ("axes", ax_index, "title"),
-                title,
-            )
-        )
-        refs.append(
-            ArtistRef(
-                f"Axes {ax_index} / X label",
-                "text",
-                ("axes", ax_index, "xlabel"),
-                ax.xaxis.label,
-            )
-        )
-        refs.append(
-            ArtistRef(
-                f"Axes {ax_index} / Y label",
-                "text",
-                ("axes", ax_index, "ylabel"),
-                ax.yaxis.label,
-            )
-        )
-        refs.append(
-            ArtistRef(
-                f"Axes {ax_index} / X axis",
-                "axis",
-                ("axes", ax_index, "xaxis"),
-                ax.xaxis,
-            )
-        )
-        refs.append(
-            ArtistRef(
-                f"Axes {ax_index} / Y axis",
-                "axis",
-                ("axes", ax_index, "yaxis"),
-                ax.yaxis,
-            )
-        )
-
-        for line_index, line in enumerate(ax.lines):
-            refs.append(
-                ArtistRef(
-                    f"Axes {ax_index} / Line {line_index}: {line.get_label()}",
-                    "line",
-                    ("axes", ax_index, "lines", line_index),
-                    line,
-                )
-            )
-
-        for container_index, container in enumerate(ax.containers):
-            if isinstance(container, BarContainer) and container.patches:
-                label = container.get_label()
-                refs.append(
-                    ArtistRef(
-                        f"Axes {ax_index} / Bar series {container_index}: {label}",
-                        "bar",
-                        ("axes", ax_index, "containers", container_index),
-                        container,
-                    )
-                )
-
-        legend = ax.get_legend()
-        if legend is not None:
-            refs.append(
-                ArtistRef(
-                    f"Axes {ax_index} / Legend",
-                    "legend",
-                    ("axes", ax_index, "legend"),
-                    legend,
-                )
-            )
-
-        for spine_name, spine in ax.spines.items():
-            refs.append(
-                ArtistRef(
-                    f"Axes {ax_index} / Spine {spine_name}",
-                    "spine",
-                    ("axes", ax_index, "spines", spine_name),
-                    spine,
-                )
-            )
-
-    return refs
+    return inspect_figure(fig)
 
 
 def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
@@ -143,6 +47,10 @@ def resolve_path(fig: Figure, path: Iterable[Any]) -> Any:
         return ax.xaxis.label
     if target == "ylabel":
         return ax.yaxis.label
+    if target == "texts":
+        return ax.texts[int(parts[3])]
+    if target == "texts_group":
+        return tuple(ax.texts)
     if target == "xaxis":
         return ax.xaxis
     if target == "yaxis":
