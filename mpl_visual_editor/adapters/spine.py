@@ -42,3 +42,6 @@ class SpineAdapter(BaseAdapter):
         except Exception:
             return False
 
+    def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
+        return {"kind": ref.kind, "artist": self._highlight_artist(ref.artist, boost_zorder=True)}
+

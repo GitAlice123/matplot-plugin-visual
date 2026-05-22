@@ -60,3 +60,18 @@ class TextAdapter(BaseAdapter):
         if ref.kind == "text_group":
             return any(self._artist_contains(text, event) for text in ref.artist)
         return super().hit_test(ref, event, editor)
+
+    def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
+        if ref.kind == "text_group":
+            return {
+                "kind": ref.kind,
+                "texts": [self._highlight_artist(text, boost_zorder=True) for text in ref.artist],
+            }
+        return super().highlight(ref, editor)
+
+    def restore_highlight(self, ref: ArtistRef, editor: Any, state: Any) -> None:
+        if ref.kind == "text_group" and isinstance(state, dict):
+            for text_state in state.get("texts", []):
+                self._restore_artist_highlight(text_state)
+            return
+        super().restore_highlight(ref, editor, state)

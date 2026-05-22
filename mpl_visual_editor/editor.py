@@ -546,69 +546,14 @@ class StyleEditor(QMainWindow):
 
     def _apply_hover_highlight(self, ref: ArtistRef) -> dict[str, Any]:
         artist = ref.artist
+        if ref.kind not in {"axis", "axes"}:
+            adapter = get_adapter(ref.kind)
+            if adapter is not None:
+                return adapter.highlight(ref, self)
+            return {"kind": ref.kind}
+
         state: dict[str, Any] = {"kind": ref.kind}
-
-        if hasattr(artist, "get_path_effects") and hasattr(artist, "set_path_effects"):
-            state["path_effects"] = artist.get_path_effects()
-            artist.set_path_effects(
-                [
-                    path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
-                    path_effects.Normal(),
-                ]
-            )
-
-        if ref.kind in {"line", "spine"}:
-            if hasattr(artist, "get_zorder") and hasattr(artist, "set_zorder"):
-                state["zorder"] = artist.get_zorder()
-                artist.set_zorder(float(state["zorder"]) + 1000)
-        elif ref.kind == "bar":
-            state["patches"] = []
-            for patch in artist.patches:
-                patch_state = {
-                    "patch": patch,
-                    "path_effects": patch.get_path_effects() if hasattr(patch, "get_path_effects") else None,
-                    "zorder": patch.get_zorder() if hasattr(patch, "get_zorder") else None,
-                }
-                state["patches"].append(patch_state)
-                if hasattr(patch, "set_path_effects"):
-                    patch.set_path_effects(
-                        [
-                            path_effects.withStroke(linewidth=5, foreground="#ffcc00"),
-                            path_effects.Normal(),
-                        ]
-                    )
-                if hasattr(patch, "set_zorder") and patch_state["zorder"] is not None:
-                    patch.set_zorder(float(patch_state["zorder"]) + 1000)
-        elif ref.kind == "text_group":
-            state["texts"] = []
-            for text in artist:
-                text_state = {
-                    "text": text,
-                    "path_effects": text.get_path_effects() if hasattr(text, "get_path_effects") else None,
-                    "zorder": text.get_zorder() if hasattr(text, "get_zorder") else None,
-                }
-                state["texts"].append(text_state)
-                if hasattr(text, "set_path_effects"):
-                    text.set_path_effects(
-                        [
-                            path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
-                            path_effects.Normal(),
-                        ]
-                    )
-                if hasattr(text, "set_zorder") and text_state["zorder"] is not None:
-                    text.set_zorder(float(text_state["zorder"]) + 1000)
-        elif ref.kind == "legend":
-            frame = artist.get_frame()
-            state["frame"] = {
-                "path_effects": frame.get_path_effects(),
-            }
-            frame.set_path_effects(
-                [
-                    path_effects.Stroke(linewidth=4, foreground="#ffcc00"),
-                    path_effects.Normal(),
-                ]
-            )
-        elif ref.kind == "axis":
+        if ref.kind == "axis":
             state["axis_artists"] = []
             for axis_artist in self._axis_highlight_artists(ref):
                 if hasattr(axis_artist, "get_path_effects") and hasattr(axis_artist, "set_path_effects"):
@@ -638,32 +583,13 @@ class StyleEditor(QMainWindow):
         return state
 
     def _restore_hover_highlight(self, ref: ArtistRef, state: dict[str, Any]) -> None:
-        artist = ref.artist
-        if "path_effects" in state:
-            artist.set_path_effects(state["path_effects"])
+        if ref.kind not in {"axis", "axes"}:
+            adapter = get_adapter(ref.kind)
+            if adapter is not None:
+                adapter.restore_highlight(ref, self, state)
+            return
 
-        if ref.kind in {"line", "spine"}:
-            if "zorder" in state:
-                artist.set_zorder(state["zorder"])
-        elif ref.kind == "bar" and "patches" in state:
-            for patch_state in state["patches"]:
-                patch = patch_state["patch"]
-                if patch_state["path_effects"] is not None:
-                    patch.set_path_effects(patch_state["path_effects"])
-                if patch_state["zorder"] is not None:
-                    patch.set_zorder(patch_state["zorder"])
-        elif ref.kind == "text_group" and "texts" in state:
-            for text_state in state["texts"]:
-                text = text_state["text"]
-                if text_state["path_effects"] is not None:
-                    text.set_path_effects(text_state["path_effects"])
-                if text_state["zorder"] is not None:
-                    text.set_zorder(text_state["zorder"])
-        elif ref.kind == "legend" and "frame" in state:
-            frame = artist.get_frame()
-            frame_state = state["frame"]
-            frame.set_path_effects(frame_state["path_effects"])
-        elif ref.kind == "axis" and "axis_artists" in state:
+        if ref.kind == "axis" and "axis_artists" in state:
             for axis_artist, old_effects in state["axis_artists"]:
                 axis_artist.set_path_effects(old_effects)
         elif ref.kind == "axes" and "overlay" in state:

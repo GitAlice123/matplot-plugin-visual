@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from matplotlib.figure import Figure
 
 from ..refs import ArtistRef
@@ -28,4 +30,7 @@ class LineAdapter(BaseAdapter):
 
     def delete(self, ref: ArtistRef) -> None:
         ref.artist.remove()
+
+    def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
+        return {"kind": ref.kind, "artist": self._highlight_artist(ref.artist, boost_zorder=True)}
 

@@ -40,3 +40,17 @@ class BarAdapter(BaseAdapter):
     def hit_test(self, ref: ArtistRef, event: Any, editor: Any) -> bool:
         return any(self._artist_contains(patch, event) for patch in ref.artist.patches)
 
+    def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
+        return {
+            "kind": ref.kind,
+            "patches": [
+                self._highlight_artist(patch, linewidth=5, boost_zorder=True)
+                for patch in ref.artist.patches
+            ],
+        }
+
+    def restore_highlight(self, ref: ArtistRef, editor: Any, state: Any) -> None:
+        if isinstance(state, dict):
+            for patch_state in state.get("patches", []):
+                self._restore_artist_highlight(patch_state)
+
