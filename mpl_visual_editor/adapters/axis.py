@@ -35,34 +35,7 @@ class AxisAdapter(BaseAdapter):
 
         x = float(event.x)
         y = float(event.y)
-        if self._axis_artist_contains(ref, event, editor, x, y):
-            return True
-
-        ax = ref.artist.axes
-        bbox = ax.bbox
-        pad = 34
-        inside_expanded = (
-            bbox.x0 - pad <= x <= bbox.x1 + pad
-            and bbox.y0 - pad <= y <= bbox.y1 + pad
-        )
-        if not inside_expanded:
-            return False
-
-        near_x_axis = bbox.x0 - pad <= x <= bbox.x1 + pad and (
-            abs(y - bbox.y0) <= pad or abs(y - bbox.y1) <= pad
-        )
-        near_y_axis = bbox.y0 - pad <= y <= bbox.y1 + pad and (
-            abs(x - bbox.x0) <= pad or abs(x - bbox.x1) <= pad
-        )
-        if not (near_x_axis or near_y_axis):
-            return False
-
-        target = "xaxis" if near_x_axis and not near_y_axis else "yaxis"
-        if near_x_axis and near_y_axis:
-            distance_x = min(abs(y - bbox.y0), abs(y - bbox.y1))
-            distance_y = min(abs(x - bbox.x0), abs(x - bbox.x1))
-            target = "xaxis" if distance_x <= distance_y else "yaxis"
-        return bool(ref.artist.axes is ax and ref.path[2] == target)
+        return self._axis_artist_contains(ref, event, editor, x, y)
 
     def highlight(self, ref: ArtistRef, editor: Any) -> dict[str, Any]:
         return {
@@ -105,7 +78,7 @@ class AxisAdapter(BaseAdapter):
         y: float,
     ) -> bool:
         renderer = editor.canvas.get_renderer()
-        for artist in self._axis_highlight_artists(ref):
+        for artist, pad_x, pad_y in self._axis_tick_hit_targets(ref):
             if hasattr(artist, "get_visible") and not artist.get_visible():
                 continue
             try:
@@ -115,17 +88,44 @@ class AxisAdapter(BaseAdapter):
             except Exception:
                 pass
             try:
-                bbox = artist.get_window_extent(renderer=renderer).expanded(1.4, 1.8)
-                if bbox.contains(x, y):
+                bbox = artist.get_window_extent(renderer=renderer)
+                if self._bbox_contains_padded(bbox, x, y, pad_x, pad_y):
                     return True
             except Exception:
                 pass
         return False
 
+    def _axis_tick_hit_targets(self, ref: ArtistRef) -> list[tuple[Any, float, float]]:
+        axis = ref.artist
+        targets: list[tuple[Any, float, float]] = []
+        for tick in axis.get_major_ticks():
+            if tick.tick1line is not None:
+                targets.append((tick.tick1line, 10.0, 10.0))
+            if tick.tick2line is not None:
+                targets.append((tick.tick2line, 10.0, 10.0))
+            if tick.label1 is not None:
+                targets.append((tick.label1, 4.0, 4.0))
+            if tick.label2 is not None:
+                targets.append((tick.label2, 4.0, 4.0))
+        return targets
+
+    def _bbox_contains_padded(self, bbox: Any, x: float, y: float, pad_x: float, pad_y: float) -> bool:
+        return bool(
+            bbox.x0 - pad_x <= x <= bbox.x1 + pad_x
+            and bbox.y0 - pad_y <= y <= bbox.y1 + pad_y
+        )
+
     def _axis_highlight_artists(self, ref: ArtistRef) -> list[Any]:
         axis = ref.artist
         artists: list[Any] = []
         for tick in axis.get_major_ticks():
-            artists.extend([tick.tick1line, tick.tick2line])
+            if tick.tick1line is not None:
+                artists.append(tick.tick1line)
+            if tick.tick2line is not None:
+                artists.append(tick.tick2line)
+            if tick.label1 is not None:
+                artists.append(tick.label1)
+            if tick.label2 is not None:
+                artists.append(tick.label2)
         return artists
 
