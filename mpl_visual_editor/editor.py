@@ -583,15 +583,15 @@ class StyleEditor(QMainWindow):
     def _target_axes(self) -> Any | None:
         ref = self.pinned_ref or self.current_ref
         artist = getattr(ref, "artist", None)
-        ax = getattr(artist, "axes", None)
+        ax = self._coerce_axes(getattr(artist, "axes", None))
         if ax is not None:
             return ax
-        return self.fig.axes[0] if self.fig.axes else None
+        return self._coerce_axes(self.fig.axes[0] if self.fig.axes else None)
 
     def _event_data_point(self, event: Any, preferred_axes: Any | None = None) -> tuple[Any, float, float] | None:
         if event.x is None or event.y is None:
             return None
-        ax = event.inaxes or preferred_axes or self._target_axes()
+        ax = self._coerce_axes(event.inaxes) or self._coerce_axes(preferred_axes) or self._target_axes()
         if ax is None:
             ax = self._nearest_axes(float(event.x), float(event.y))
         if ax is None:
@@ -600,6 +600,18 @@ class StyleEditor(QMainWindow):
             return ax, float(event.xdata), float(event.ydata)
         data_x, data_y = ax.transData.inverted().transform((float(event.x), float(event.y)))
         return ax, float(data_x), float(data_y)
+
+    def _coerce_axes(self, candidate: Any) -> Any | None:
+        if candidate is None:
+            return None
+        if hasattr(candidate, "transData"):
+            return candidate
+        if isinstance(candidate, (list, tuple)):
+            for item in candidate:
+                ax = self._coerce_axes(item)
+                if ax is not None:
+                    return ax
+        return None
 
     def _event_artist_point(self, event: Any, artist: Any) -> tuple[float, float] | None:
         if event.x is None or event.y is None:
@@ -1043,6 +1055,8 @@ class StyleEditor(QMainWindow):
             points = self._line_handle_points(ref.artist)
         else:
             points = self._arrow_handle_points(ref.artist)
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
         for name, (x, y) in points.items():
             marker = "o" if name in {"rotate", "start", "end"} else "s"
             handle = ax.plot(
@@ -1062,6 +1076,8 @@ class StyleEditor(QMainWindow):
             handle._mve_handle = name
             handle._mve_hit_radius = 14.0 if name in {"start", "end"} else 10.0
             self._selection_handles.append(handle)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
 
     def _clear_selection_handles(self) -> None:
         for handle in self._selection_handles:

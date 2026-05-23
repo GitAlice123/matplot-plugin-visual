@@ -113,6 +113,8 @@ def apply_shape_props(ax: Any, props: dict[str, Any], artist: Any | None = None)
     props = dict(props)
     props.setdefault("id", _new_id("shape"))
     props.setdefault("type", "rectangle")
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
     if artist is None:
         artist = find_editor_artist(ax, "shape", str(props["id"]))
     if artist is not None and getattr(artist, "_mve_shape_type", None) != props["type"]:
@@ -121,6 +123,8 @@ def apply_shape_props(ax: Any, props: dict[str, Any], artist: Any | None = None)
     if artist is None:
         artist = _create_shape(ax, props)
     _update_shape_artist(artist, props)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
     return artist
 
 
