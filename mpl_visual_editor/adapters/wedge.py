@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.figure import Figure
 from matplotlib.patches import Wedge
@@ -63,6 +63,6 @@ class WedgeAdapter(BaseAdapter):
         editor._add_float("End angle", float(artist.theta2), artist.set_theta2, -3600.0, 3600.0, 1.0)
         return True
 
-    def _set_center(self, artist: Any, x: float | None = None, y: float | None = None) -> None:
+    def _set_center(self, artist: Any, x: Optional[float] = None, y: Optional[float] = None) -> None:
         center_x, center_y = artist.center
         artist.set_center((float(center_x if x is None else x), float(center_y if y is None else y)))

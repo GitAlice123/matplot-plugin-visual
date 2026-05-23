@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.figure import Figure
 from matplotlib.patches import FancyArrowPatch
@@ -83,11 +83,11 @@ def apply_arrow_props(artist: Any, props: dict[str, Any]) -> None:
 def _set_arrow_style(
     artist: Any,
     *,
-    edgecolor: Any | None = None,
-    linewidth: Any | None = None,
-    linestyle: Any | None = None,
-    mutation_scale: Any | None = None,
-    alpha: Any | None = None,
+    edgecolor: Optional[Any] = None,
+    linewidth: Optional[Any] = None,
+    linestyle: Optional[Any] = None,
+    mutation_scale: Optional[Any] = None,
+    alpha: Optional[Any] = None,
 ) -> None:
     if edgecolor is not None:
         artist.set_color(edgecolor)

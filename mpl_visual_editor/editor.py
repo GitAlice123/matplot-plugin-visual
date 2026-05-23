@@ -9,7 +9,7 @@ import math
 import sys
 import warnings
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Optional, Union
 
 import matplotlib
 
@@ -144,9 +144,9 @@ class _AspectCanvasHost(QWidget):
 
 def edit(
     fig: Figure,
-    export_path: str | Path | None = None,
+    export_path: Optional[Union[str, Path]] = None,
     apply_existing: bool = True,
-    source_path: str | Path | None = None,
+    source_path: Optional[Union[str, Path]] = None,
 ) -> None:
     """Open a visual editor for an existing Matplotlib figure.
 
@@ -194,7 +194,7 @@ def edit(
     app.exec()
 
 
-def _infer_calling_script() -> Path | None:
+def _infer_calling_script() -> Optional[Path]:
     this_file = Path(__file__).resolve()
     package_init = this_file.with_name("__init__.py")
     for frame in inspect.stack()[1:]:
@@ -209,13 +209,13 @@ def _infer_calling_script() -> Path | None:
     return None
 
 
-def _default_export_path(source_path: Path | None) -> Path:
+def _default_export_path(source_path: Optional[Path]) -> Path:
     if source_path is None:
         return Path("style_patch.py")
     return source_path.with_name(f"{source_path.stem}_style_patch.py")
 
 
-def _source_metadata(source_path: Path | None) -> str | None:
+def _source_metadata(source_path: Optional[Path]) -> Optional[str]:
     if source_path is None:
         return None
     try:
@@ -228,7 +228,7 @@ def _normalize_source_metadata(value: str) -> str:
     return value.replace("\\", "/").strip()
 
 
-def _apply_existing_style_patch(fig: Figure, patch_path: str | Path) -> str | None:
+def _apply_existing_style_patch(fig: Figure, patch_path: Union[str, Path]) -> Optional[str]:
     patch_path = Path(patch_path)
     module_name = f"_mpl_visual_editor_style_patch_{abs(hash(patch_path.resolve()))}"
     spec = importlib.util.spec_from_file_location(module_name, patch_path)
@@ -349,48 +349,48 @@ class StyleEditor(QMainWindow):
     def __init__(
         self,
         fig: Figure,
-        export_path: str | Path = "style_patch.py",
-        source_path: Path | None = None,
+        export_path: Union[str, Path] = "style_patch.py",
+        source_path: Optional[Path] = None,
     ) -> None:
         super().__init__()
         self.fig = fig
         self.export_path = Path(export_path)
         self.source_path = source_path
         self.refs: list[ArtistRef] = iter_artist_refs(fig)
-        self.current_ref: ArtistRef | None = None
-        self.hover_ref: ArtistRef | None = None
-        self.pinned_ref: ArtistRef | None = None
-        self._highlight_state: dict[str, Any] | None = None
+        self.current_ref: Optional[ArtistRef] = None
+        self.hover_ref: Optional[ArtistRef] = None
+        self.pinned_ref: Optional[ArtistRef] = None
+        self._highlight_state: Optional[dict[str, Any]] = None
         self._building_form = False
         self._selecting_programmatically = False
         self._rebuilding_legend = False
         self._suppress_dirty = False
-        self._committed_snapshot: dict[str, Any] | None = None
+        self._committed_snapshot: Optional[dict[str, Any]] = None
         self._dirty = False
         self._save_buttons: list[QPushButton] = []
         self._dirty_widgets: set[QWidget] = set()
-        self._active_save_button: QPushButton | None = None
-        self._position_save_button: QPushButton | None = None
-        self._legend_press_xy: tuple[float, float] | None = None
-        self._drag_ref: ArtistRef | None = None
-        self._drag_last_data: tuple[float, float] | None = None
+        self._active_save_button: Optional[QPushButton] = None
+        self._position_save_button: Optional[QPushButton] = None
+        self._legend_press_xy: Optional[tuple[float, float]] = None
+        self._drag_ref: Optional[ArtistRef] = None
+        self._drag_last_data: Optional[tuple[float, float]] = None
         self._drag_moved = False
-        self._insert_tool: str | None = None
-        self._draw_anchor_data: tuple[float, float] | None = None
+        self._insert_tool: Optional[str] = None
+        self._draw_anchor_data: Optional[tuple[float, float]] = None
         self._selection_handles: list[Any] = []
-        self._active_handle: str | None = None
+        self._active_handle: Optional[str] = None
         self._legend_position_dirty = False
         self._fit_in_progress = False
-        self._base_subplotpars: tuple[float, float, float, float] | None = None
-        self._preview_zoom: float | None = None
+        self._base_subplotpars: Optional[tuple[float, float, float, float]] = None
+        self._preview_zoom: Optional[float] = None
         self._has_unexported_changes = False
         self._history_limit = 10
         self._undo_stack: list[dict[str, Any]] = []
         self._redo_stack: list[dict[str, Any]] = []
         self._restoring_history = False
-        self._pending_history_snapshot: dict[str, Any] | None = None
-        self._inline_text_editor: QLineEdit | None = None
-        self._inline_text_ref: ArtistRef | None = None
+        self._pending_history_snapshot: Optional[dict[str, Any]] = None
+        self._inline_text_editor: Optional[QLineEdit] = None
+        self._inline_text_ref: Optional[ArtistRef] = None
         self._inline_text_committing = False
 
         self.setWindowTitle("Matplotlib Visual Style Editor")
@@ -604,7 +604,7 @@ class StyleEditor(QMainWindow):
         self.status.setText(message)
         return True
 
-    def _target_axes(self) -> Any | None:
+    def _target_axes(self) -> Optional[Any]:
         ref = self.pinned_ref or self.current_ref
         artist = getattr(ref, "artist", None)
         ax = self._coerce_axes(getattr(artist, "axes", None))
@@ -612,7 +612,7 @@ class StyleEditor(QMainWindow):
             return ax
         return self._coerce_axes(self.fig.axes[0] if self.fig.axes else None)
 
-    def _event_data_point(self, event: Any, preferred_axes: Any | None = None) -> tuple[Any, float, float] | None:
+    def _event_data_point(self, event: Any, preferred_axes: Optional[Any] = None) -> Optional[tuple[Any, float, float]]:
         if event.x is None or event.y is None:
             return None
         ax = self._coerce_axes(event.inaxes) or self._coerce_axes(preferred_axes) or self._target_axes()
@@ -625,7 +625,7 @@ class StyleEditor(QMainWindow):
         data_x, data_y = ax.transData.inverted().transform((float(event.x), float(event.y)))
         return ax, float(data_x), float(data_y)
 
-    def _coerce_axes(self, candidate: Any) -> Any | None:
+    def _coerce_axes(self, candidate: Any) -> Optional[Any]:
         if candidate is None:
             return None
         if hasattr(candidate, "transData"):
@@ -637,7 +637,7 @@ class StyleEditor(QMainWindow):
                     return ax
         return None
 
-    def _event_artist_point(self, event: Any, artist: Any) -> tuple[float, float] | None:
+    def _event_artist_point(self, event: Any, artist: Any) -> Optional[tuple[float, float]]:
         if event.x is None or event.y is None:
             return None
         try:
@@ -649,7 +649,7 @@ class StyleEditor(QMainWindow):
             _ax, x, y = target
         return float(x), float(y)
 
-    def _nearest_axes(self, x: float, y: float) -> Any | None:
+    def _nearest_axes(self, x: float, y: float) -> Optional[Any]:
         if not self.fig.axes:
             return None
         renderer = self.canvas.get_renderer()
@@ -665,7 +665,7 @@ class StyleEditor(QMainWindow):
                 best_ax = ax
         return best_ax
 
-    def _set_text_position(self, artist: Any, x: float | None = None, y: float | None = None) -> None:
+    def _set_text_position(self, artist: Any, x: Optional[float] = None, y: Optional[float] = None) -> None:
         current_x, current_y = artist.get_position()
         artist.set_position(
             (
@@ -705,7 +705,7 @@ class StyleEditor(QMainWindow):
                 self._set_hover_highlight(ref)
                 return
 
-    def _on_selection_changed(self, current: QListWidgetItem | None) -> None:
+    def _on_selection_changed(self, current: Optional[QListWidgetItem]) -> None:
         if current is None:
             return
         if not self._selecting_programmatically:
@@ -872,7 +872,7 @@ class StyleEditor(QMainWindow):
         self._show_selection_handles(ref)
         self._start_inline_text_edit(ref)
 
-    def _text_ref_at_event(self, event: Any) -> ArtistRef | None:
+    def _text_ref_at_event(self, event: Any) -> Optional[ArtistRef]:
         for ref in reversed(self.refs):
             if ref.kind not in {"text", "textbox"}:
                 continue
@@ -1012,10 +1012,10 @@ class StyleEditor(QMainWindow):
         line._mve_xdata = list(xdata)
         line._mve_ydata = list(ydata)
 
-    def _find_selection_handle(self, event: Any) -> str | None:
+    def _find_selection_handle(self, event: Any) -> Optional[str]:
         if event.x is None or event.y is None:
             return None
-        best_handle: str | None = None
+        best_handle: Optional[str] = None
         best_distance = float("inf")
         priority = {
             "start": 0,
@@ -1206,7 +1206,7 @@ class StyleEditor(QMainWindow):
             return
         apply_arrow_props(ref.artist, props)
 
-    def _show_selection_handles(self, ref: ArtistRef | None) -> None:
+    def _show_selection_handles(self, ref: Optional[ArtistRef]) -> None:
         self._clear_selection_handles()
         if ref is None or ref.kind not in {"shape", "textbox", "arrow"}:
             return
@@ -1359,7 +1359,7 @@ class StyleEditor(QMainWindow):
         self._clear_hover_highlight(redraw=False)
         super().closeEvent(event)
 
-    def _find_ref_at_event(self, event: Any) -> ArtistRef | None:
+    def _find_ref_at_event(self, event: Any) -> Optional[ArtistRef]:
         if event.x is None or event.y is None:
             return None
 
@@ -1395,7 +1395,7 @@ class StyleEditor(QMainWindow):
                     self.object_list.setCurrentRow(row)
                 return
 
-    def _refresh_refs_preserving_path(self, path: tuple[Any, ...] | list[Any] | None) -> None:
+    def _refresh_refs_preserving_path(self, path: Optional[Union[tuple[Any, ...], list[Any]]]) -> None:
         self._clear_hover_highlight(redraw=False)
         self._clear_selection_handles()
         self.refs = iter_artist_refs(self.fig)
@@ -1420,7 +1420,7 @@ class StyleEditor(QMainWindow):
         self._set_hover_highlight(selected_ref)
         self._show_selection_handles(selected_ref)
 
-    def _ref_for_path(self, path: tuple[Any, ...] | list[Any] | None) -> ArtistRef | None:
+    def _ref_for_path(self, path: Optional[Union[tuple[Any, ...], list[Any]]]) -> Optional[ArtistRef]:
         if path is None:
             return None
         target = tuple(path)
@@ -1604,7 +1604,7 @@ class StyleEditor(QMainWindow):
                 pass
         return ref.kind not in {"unsupported", "text_group"}
 
-    def _push_undo_snapshot(self, snapshot: dict[str, Any] | None = None) -> None:
+    def _push_undo_snapshot(self, snapshot: Optional[dict[str, Any]] = None) -> None:
         if self._building_form or self._suppress_dirty or self._restoring_history:
             return
         snapshot = snapshot or self._capture_history_snapshot()
@@ -1710,7 +1710,7 @@ class StyleEditor(QMainWindow):
             return
         self._rebuild_legend(self.current_ref.artist, **changes)
 
-    def _set_figure_size(self, width: float | None = None, height: float | None = None) -> None:
+    def _set_figure_size(self, width: Optional[float] = None, height: Optional[float] = None) -> None:
         width_now, height_now = self._figure_size()
         self._apply_figure_size(
             float(width_now if width is None else width),
@@ -1834,7 +1834,7 @@ class StyleEditor(QMainWindow):
             return False
         return True
 
-    def _first_bar_patch(self, container: Any) -> Any | None:
+    def _first_bar_patch(self, container: Any) -> Optional[Any]:
         return container.patches[0] if getattr(container, "patches", None) else None
 
     def _set_bar_visible(self, container: Any, visible: bool) -> None:
@@ -1873,7 +1873,7 @@ class StyleEditor(QMainWindow):
         patch.set_width(signed_width)
         patch.set_x(center - signed_width / 2.0)
 
-    def _first_text_in_group(self, texts: Any) -> Any | None:
+    def _first_text_in_group(self, texts: Any) -> Optional[Any]:
         for text in texts:
             if hasattr(text, "get_text"):
                 return text
@@ -1895,7 +1895,7 @@ class StyleEditor(QMainWindow):
         for text in texts:
             text.set_fontstyle(style)
 
-    def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float, end: float | None = None) -> None:
+    def _apply_axis_ticks(self, axis: Any, axis_name: str, start: float, interval: float, end: Optional[float] = None) -> None:
         interval = float(interval)
         start = float(start)
         if end is not None:
@@ -1943,11 +1943,11 @@ class StyleEditor(QMainWindow):
     def _apply_axis_tick_labels(
         self,
         axis: Any,
-        fontsize: float | None = None,
-        color: str | None = None,
-        weight: str | None = None,
-        style: str | None = None,
-        rotation: float | None = None,
+        fontsize: Optional[float] = None,
+        color: Optional[str] = None,
+        weight: Optional[str] = None,
+        style: Optional[str] = None,
+        rotation: Optional[float] = None,
     ) -> None:
         fontsize = self._axis_tick_label_prop(axis, "fontsize", 10.0) if fontsize is None else fontsize
         color = self._axis_tick_label_prop(axis, "color", "#000000") if color is None else color
@@ -2162,7 +2162,7 @@ class StyleEditor(QMainWindow):
                     self.status.setText("Legend layout updated")
                 return
 
-    def _apply(self, callback: Callable[[], Any], save_button: QPushButton | None = None) -> None:
+    def _apply(self, callback: Callable[[], Any], save_button: Optional[QPushButton] = None) -> None:
         if self._building_form:
             return
         view_state = self._capture_preview_view()
@@ -2332,13 +2332,13 @@ class StyleEditor(QMainWindow):
                 return marker
         return "o"
 
-    def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
+    def _mark_dirty(self, save_button: Optional[QPushButton] = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
         self._auto_save_current_state()
         return
 
-    def _mark_pending_dirty(self, save_button: QPushButton | None = None) -> None:
+    def _mark_pending_dirty(self, save_button: Optional[QPushButton] = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
         self.status.setText("Text changed. Press Enter to apply and auto-save it.")
@@ -2353,7 +2353,7 @@ class StyleEditor(QMainWindow):
             return
         self._has_unexported_changes = True
 
-    def _auto_save_current_state(self, message: str | None = None) -> None:
+    def _auto_save_current_state(self, message: Optional[str] = None) -> None:
         if self._building_form or self._suppress_dirty or self.current_ref is None:
             return
         self._mark_unexported_changes()
@@ -2367,7 +2367,7 @@ class StyleEditor(QMainWindow):
         self._legend_position_dirty = False
         self.status.setText(message or f"Auto-saved: {self.current_ref.label}")
 
-    def _legacy_mark_dirty(self, save_button: QPushButton | None = None) -> None:
+    def _legacy_mark_dirty(self, save_button: Optional[QPushButton] = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
         self._dirty = True
@@ -2380,7 +2380,7 @@ class StyleEditor(QMainWindow):
             save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
         self.status.setText("Preview auto-saved.")
 
-    def _save_current_changes(self, editor_widget: QWidget | None = None) -> None:
+    def _save_current_changes(self, editor_widget: Optional[QWidget] = None) -> None:
         if self.current_ref is None:
             return
         old_suppress_dirty = self._suppress_dirty
@@ -2420,7 +2420,7 @@ class StyleEditor(QMainWindow):
             return
         self._save_current_changes()
 
-    def _commit_editor(self, widget: QWidget | None = None) -> None:
+    def _commit_editor(self, widget: Optional[QWidget] = None) -> None:
         if widget is not None and not isinstance(widget, QWidget):
             widget = None
         widget = widget or QApplication.focusWidget()
@@ -2438,7 +2438,7 @@ class StyleEditor(QMainWindow):
             if widget.hasFocus():
                 widget.clearFocus()
 
-    def _commit_all_form_editors(self, skip: QWidget | None = None) -> None:
+    def _commit_all_form_editors(self, skip: Optional[QWidget] = None) -> None:
         for widget in self.form_host.findChildren(QDoubleSpinBox):
             if widget is skip:
                 continue
@@ -2651,7 +2651,7 @@ class StyleEditor(QMainWindow):
         finally:
             self._suppress_dirty = False
 
-    def _redraw(self, message: str, view_state: dict[str, float] | None = None) -> None:
+    def _redraw(self, message: str, view_state: Optional[dict[str, float]] = None) -> None:
         view_state = view_state or self._capture_preview_view()
         self._fit_figure_to_canvas(adjust_layout=True)
         self._restore_preview_view(view_state)
@@ -2659,7 +2659,7 @@ class StyleEditor(QMainWindow):
         QTimer.singleShot(0, lambda: self._restore_preview_view(view_state))
         self.status.setText(message)
 
-    def _capture_preview_view(self) -> dict[str, float] | None:
+    def _capture_preview_view(self) -> Optional[dict[str, float]]:
         if not hasattr(self, "canvas_scroll"):
             return None
         hbar = self.canvas_scroll.horizontalScrollBar()
@@ -2676,7 +2676,7 @@ class StyleEditor(QMainWindow):
             "is_fit": float(is_fit),
         }
 
-    def _restore_preview_view(self, state: dict[str, float] | None) -> None:
+    def _restore_preview_view(self, state: Optional[dict[str, float]]) -> None:
         if state is None or not hasattr(self, "canvas_scroll"):
             return
         if not bool(state.get("is_fit", 0.0)):
@@ -2796,7 +2796,7 @@ class StyleEditor(QMainWindow):
             return ".tiff"
         return ".pdf"
 
-    def _save_figure(self, path: str | Path) -> Path:
+    def _save_figure(self, path: Union[str, Path]) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         highlighted_ref = self.hover_ref

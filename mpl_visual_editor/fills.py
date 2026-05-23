@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.collections import PolyCollection
 from matplotlib.colors import to_hex
@@ -28,7 +28,7 @@ def fill_props(artist: Any) -> dict[str, Any]:
     }
 
 
-def apply_fill_props(ax: Any, props: dict[str, Any], artist: Any | None = None) -> PolyCollection:
+def apply_fill_props(ax: Any, props: dict[str, Any], artist: Optional[Any] = None) -> PolyCollection:
     props = dict(props)
     props.setdefault("id", "fill")
     if artist is None:
@@ -56,7 +56,7 @@ def apply_fill_props(ax: Any, props: dict[str, Any], artist: Any | None = None) 
     return artist
 
 
-def _find_fill(ax: Any, editor_id: str) -> Any | None:
+def _find_fill(ax: Any, editor_id: str) -> Optional[Any]:
     for collection in ax.collections:
         if getattr(collection, "_mve_kind", None) == "fill" and getattr(collection, "_mve_id", None) == editor_id:
             return collection

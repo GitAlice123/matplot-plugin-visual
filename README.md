@@ -69,6 +69,8 @@ exports a replayable patch.
 
 ## Install
 
+Requires Python 3.9 or newer.
+
 For local development, install the project in editable mode from the repository
 root:
 

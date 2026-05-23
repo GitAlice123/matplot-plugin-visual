@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.colors import to_hex
 from matplotlib.patches import Ellipse, FancyArrowPatch, FancyBboxPatch, Polygon, Rectangle
@@ -13,7 +13,7 @@ LINE_SHAPE_TYPES = {"line", "arrow", "double_arrow"}
 ARROW_SHAPE_TYPES = {"arrow", "double_arrow"}
 
 
-def add_shape(ax: Any, shape_type: str, center: tuple[float, float] | None = None) -> Any:
+def add_shape(ax: Any, shape_type: str, center: Optional[tuple[float, float]] = None) -> Any:
     x, y, width, height = _default_geometry(ax)
     if center is not None:
         x, y = float(center[0]), float(center[1])
@@ -36,7 +36,7 @@ def add_shape(ax: Any, shape_type: str, center: tuple[float, float] | None = Non
     return apply_shape_props(ax, props)
 
 
-def add_textbox(ax: Any, center: tuple[float, float] | None = None) -> Any:
+def add_textbox(ax: Any, center: Optional[tuple[float, float]] = None) -> Any:
     x, y, _width, _height = _default_geometry(ax)
     if center is not None:
         x, y = float(center[0]), float(center[1])
@@ -59,7 +59,7 @@ def add_textbox(ax: Any, center: tuple[float, float] | None = None) -> Any:
     return apply_textbox_props(ax, props)
 
 
-def find_editor_artist(ax: Any, kind: str, editor_id: str) -> Any | None:
+def find_editor_artist(ax: Any, kind: str, editor_id: str) -> Optional[Any]:
     artists = ax.texts if kind == "textbox" else ax.patches
     for artist in artists:
         if getattr(artist, "_mve_kind", None) == kind and getattr(artist, "_mve_id", None) == editor_id:
@@ -109,7 +109,7 @@ def textbox_props(artist: Any) -> dict[str, Any]:
     }
 
 
-def apply_shape_props(ax: Any, props: dict[str, Any], artist: Any | None = None) -> Any:
+def apply_shape_props(ax: Any, props: dict[str, Any], artist: Optional[Any] = None) -> Any:
     props = dict(props)
     props.setdefault("id", _new_id("shape"))
     props.setdefault("type", "rectangle")
@@ -128,7 +128,7 @@ def apply_shape_props(ax: Any, props: dict[str, Any], artist: Any | None = None)
     return artist
 
 
-def apply_textbox_props(ax: Any, props: dict[str, Any], artist: Any | None = None) -> Any:
+def apply_textbox_props(ax: Any, props: dict[str, Any], artist: Optional[Any] = None) -> Any:
     props = dict(props)
     props.setdefault("id", _new_id("textbox"))
     if artist is None:
@@ -301,7 +301,7 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:10]}"
 
 
-def _edgecolor(artist: Any) -> str | None:
+def _edgecolor(artist: Any) -> Optional[str]:
     if hasattr(artist, "get_edgecolor"):
         return _color(artist.get_edgecolor())
     if hasattr(artist, "get_color"):
@@ -324,7 +324,7 @@ def _linestyle(artist: Any) -> str:
     return aliases.get(str(value), str(value))
 
 
-def _color(value: Any) -> str | None:
+def _color(value: Any) -> Optional[str]:
     if value is None:
         return None
     try:

@@ -6,7 +6,7 @@ import importlib.util
 import inspect
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Union
 
 from matplotlib.figure import Figure
 
@@ -18,7 +18,7 @@ class StyleRunResult:
     """Result returned by :func:`style_figure`."""
 
     style_path: Path
-    figure_path: Path | None
+    figure_path: Optional[Path]
     style_applied: bool
     figure_saved: bool
 
@@ -28,13 +28,13 @@ def style_figure(
     *,
     mode: StyleMode = "edit",
     enabled: bool = True,
-    name: str | None = None,
-    source_path: str | Path | None = None,
-    style_path: str | Path | None = None,
-    style_dir: str | Path = "styles",
-    save_path: str | Path | None = None,
+    name: Optional[str] = None,
+    source_path: Optional[Union[str, Path]] = None,
+    style_path: Optional[Union[str, Path]] = None,
+    style_dir: Union[str, Path] = "styles",
+    save_path: Optional[Union[str, Path]] = None,
     save: bool = False,
-    save_kwargs: dict[str, Any] | None = None,
+    save_kwargs: Optional[dict[str, Any]] = None,
     apply_existing: bool = True,
 ) -> StyleRunResult:
     """Run the common edit/apply/off style workflow for a Matplotlib figure.
@@ -96,10 +96,10 @@ def style_figure(
 
 def resolve_style_path(
     *,
-    name: str | None = None,
-    source_path: str | Path | None = None,
-    style_path: str | Path | None = None,
-    style_dir: str | Path = "styles",
+    name: Optional[str] = None,
+    source_path: Optional[Union[str, Path]] = None,
+    style_path: Optional[Union[str, Path]] = None,
+    style_dir: Union[str, Path] = "styles",
 ) -> Path:
     """Resolve the patch path used by plot scripts."""
 
@@ -111,9 +111,9 @@ def resolve_style_path(
 
 def default_figure_path(
     *,
-    name: str | None = None,
-    source_path: str | Path | None = None,
-    figure_dir: str | Path = "figures",
+    name: Optional[str] = None,
+    source_path: Optional[Union[str, Path]] = None,
+    figure_dir: Union[str, Path] = "figures",
     suffix: str = ".pdf",
 ) -> Path:
     """Return the conventional figure export path for a styled plot."""
@@ -125,7 +125,7 @@ def default_figure_path(
 
 def apply_style_patch(
     fig: Figure,
-    style_path: str | Path,
+    style_path: Union[str, Path],
     *,
     missing: Literal["warn", "ignore", "error"] = "warn",
 ) -> bool:
@@ -216,7 +216,7 @@ def _repair_scatter_legend_handle_specs(module: Any) -> None:
             )
 
 
-def _style_stem(*, name: str | None, source_path: str | Path | None) -> str:
+def _style_stem(*, name: Optional[str], source_path: Optional[Union[str, Path]]) -> str:
     if name:
         return name
     if source_path is not None:
@@ -224,7 +224,7 @@ def _style_stem(*, name: str | None, source_path: str | Path | None) -> str:
     return "style"
 
 
-def _infer_calling_script() -> Path | None:
+def _infer_calling_script() -> Optional[Path]:
     this_file = Path(__file__).resolve()
     package_init = this_file.with_name("__init__.py")
     for frame in inspect.stack()[1:]:

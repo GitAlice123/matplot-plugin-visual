@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.figure import Figure
 from PySide6.QtWidgets import QLabel
@@ -111,7 +111,7 @@ class TextAdapter(BaseAdapter):
         editor._add_position_save_button("Save position")
         return True
 
-    def _axes_for_fixed_text(self, ref: ArtistRef, editor: Any) -> Any | None:
+    def _axes_for_fixed_text(self, ref: ArtistRef, editor: Any) -> Optional[Any]:
         if len(ref.path) < 3 or ref.path[0] != "axes":
             return None
         try:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from matplotlib.figure import Figure
 
@@ -47,7 +47,7 @@ def registered_adapters() -> list[ArtistAdapter]:
     return list(_ADAPTERS)
 
 
-def get_adapter(kind: str) -> ArtistAdapter | None:
+def get_adapter(kind: str) -> Optional[ArtistAdapter]:
     for adapter in _ADAPTERS:
         if adapter.kind == kind or kind in getattr(adapter, "aliases", ()):
             return adapter

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 import math
 
 from matplotlib.collections import PathCollection
@@ -240,7 +240,7 @@ def _plain_value(value: Any) -> Any:
     return value
 
 
-def _legend_fontsize(legend: Any) -> float | None:
+def _legend_fontsize(legend: Any) -> Optional[float]:
     texts = legend.get_texts()
     if not texts:
         return None
@@ -304,7 +304,7 @@ def _legend_handle_specs(legend: Any) -> list[dict[str, Any]]:
     return specs
 
 
-def _line_marker_spec(handle: Any, label: str) -> dict[str, Any] | None:
+def _line_marker_spec(handle: Any, label: str) -> Optional[dict[str, Any]]:
     if not (hasattr(handle, "get_marker") and hasattr(handle, "get_linestyle")):
         return None
     marker = handle.get_marker()
@@ -325,7 +325,7 @@ def _line_marker_spec(handle: Any, label: str) -> dict[str, Any] | None:
     }
 
 
-def _path_spec(path: Any) -> dict[str, Any] | None:
+def _path_spec(path: Any) -> Optional[dict[str, Any]]:
     if path is None:
         return None
     vertices = path.vertices.tolist() if hasattr(path.vertices, "tolist") else list(path.vertices)
@@ -333,7 +333,7 @@ def _path_spec(path: Any) -> dict[str, Any] | None:
     return {"vertices": vertices, "codes": codes}
 
 
-def _marker_name(path: Any) -> str | None:
+def _marker_name(path: Any) -> Optional[str]:
     if path is None:
         return None
     for marker in ["x", "o", "s", "^", "v", "D", "+", "*", ".", "P", "X"]:
@@ -425,7 +425,7 @@ def _axis_tick_label_prop(axis: Any, prop: str, default: Any) -> Any:
     return default
 
 
-def _color(value: Any) -> str | None:
+def _color(value: Any) -> Optional[str]:
     if value is None:
         return None
     try:
