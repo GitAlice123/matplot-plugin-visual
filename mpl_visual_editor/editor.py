@@ -1792,8 +1792,7 @@ class StyleEditor(QMainWindow):
             target_width = max(1, int(round(natural_width * scale)))
             target_height = max(1, int(round(natural_height * scale)))
             target_dpi = max(1.0, PREVIEW_DPI * scale)
-            if not math.isclose(float(self.fig.dpi), target_dpi, rel_tol=0.001, abs_tol=0.001):
-                self.fig.set_dpi(target_dpi)
+            self._set_canvas_logical_dpi(target_dpi)
             if self.canvas.width() != target_width or self.canvas.height() != target_height:
                 self.canvas.setFixedSize(target_width, target_height)
                 self.canvas_host.setMinimumSize(target_width + margin, target_height + margin)
@@ -1818,7 +1817,9 @@ class StyleEditor(QMainWindow):
         self.canvas.draw_idle()
 
     def _current_preview_scale(self) -> float:
-        return max(0.1, float(self.fig.dpi) / PREVIEW_DPI)
+        dpr = self._canvas_device_pixel_ratio()
+        logical_dpi = float(self.fig.dpi) / dpr
+        return max(0.1, logical_dpi / PREVIEW_DPI)
 
     def _update_preview_zoom_label(self, scale: float) -> None:
         if not hasattr(self, "preview_zoom_label"):
@@ -1850,6 +1851,7 @@ class StyleEditor(QMainWindow):
     def _set_axis_labelpad(self, axis: Any, value: float) -> None:
         axis.labelpad = float(value)
         axis._mve_labelpad = float(value)
+        self._invalidate_layout_cache()
 
     def _is_categorical_axis(self, axis: Any, axis_name: str) -> bool:
         ax = axis.axes
@@ -1995,6 +1997,7 @@ class StyleEditor(QMainWindow):
         axis._mve_tick_label_fontstyle = style
         axis._mve_tick_label_rotation = float(rotation)
         self._reapply_axis_tick_label_style(axis)
+        self._invalidate_layout_cache()
 
     def _reapply_axis_tick_label_style(self, axis: Any) -> None:
         if not hasattr(axis, "_mve_tick_label_fontsize"):
@@ -2768,6 +2771,35 @@ class StyleEditor(QMainWindow):
             self.fig.subplots_adjust(left=left, right=right, bottom=bottom, top=top)
         except Exception:
             pass
+
+    def _invalidate_layout_cache(self) -> None:
+        self._base_subplotpars = None
+
+    def _canvas_device_pixel_ratio(self) -> float:
+        ratio = getattr(self.canvas, "device_pixel_ratio", None)
+        if ratio is None and hasattr(self.canvas, "devicePixelRatioF"):
+            try:
+                ratio = self.canvas.devicePixelRatioF()
+            except Exception:
+                ratio = None
+        try:
+            ratio = float(ratio)
+        except (TypeError, ValueError):
+            ratio = 1.0
+        if not math.isfinite(ratio) or ratio <= 0:
+            return 1.0
+        return ratio
+
+    def _set_canvas_logical_dpi(self, logical_dpi: float) -> None:
+        dpr = self._canvas_device_pixel_ratio()
+        actual_dpi = max(1.0, float(logical_dpi) * dpr)
+        self.fig._original_dpi = float(logical_dpi)
+        if math.isclose(float(self.fig.dpi), actual_dpi, rel_tol=0.001, abs_tol=0.001):
+            return
+        if hasattr(self.fig, "_set_dpi"):
+            self.fig._set_dpi(actual_dpi, forward=False)
+        else:
+            self.fig.set_dpi(actual_dpi)
 
     def _export(self) -> None:
         self._discard_unsaved_preview()
