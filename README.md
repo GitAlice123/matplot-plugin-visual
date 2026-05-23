@@ -3,39 +3,46 @@
 A minimal prototype for visually tweaking the style of an existing Matplotlib
 `Figure` and exporting the result as a Python post-processing function.
 
-The intended user flow:
+The intended user flow is to keep plotting code unchanged, then pass the
+finished `Figure` through `style_figure`:
 
 ```python
-from mpl_visual_editor import edit
+from mpl_visual_editor import style_figure
 
 # Build your normal Matplotlib figure here.
-edit(fig)
+style_figure(
+    fig,
+    mode="edit",  # "edit": open GUI; "apply": apply saved patch; "off": raw plot.
+    name="my_plot",
+    source_path=__file__,
+)
 ```
 
-Click **Export style patch** in the editor to generate a patch next to the
-calling script:
+Click **Export style patch** in the editor to generate a replayable patch:
 
 ```text
-examples/demo_basic.py -> examples/demo_basic_style_patch.py
-examples/demo_bar.py   -> examples/demo_bar_style_patch.py
+styles/my_plot_style_patch.py
 ```
 
-Use the generated patch from normal plotting code:
+Use the generated patch later by switching the mode:
 
 ```python
-from examples.demo_basic_style_patch import apply_style
-
-apply_style(fig)
+style_figure(
+    fig,
+    mode="apply",
+    name="my_plot",
+    source_path=__file__,
+)
 ```
 
-For continued editing, keep exporting to the same patch. The next time you call
-`edit(fig)`, the editor automatically applies that script-specific patch first,
-so the window opens from your last saved style instead of the raw figure.
+For continued editing, keep exporting to the same patch. The next time you use
+`mode="edit"`, the editor automatically applies that plot's existing patch
+first, so the window opens from your last saved style instead of the raw figure.
 
 You can also choose a custom patch:
 
 ```python
-edit(fig, export_path="styles/my_figure_style.py")
+style_figure(fig, mode="edit", style_path="styles/my_figure_style.py")
 ```
 
 The editor will reopen from `styles/my_figure_style.py` next time and overwrite
@@ -44,7 +51,15 @@ that same file when you export.
 If you want to ignore an existing patch and edit the raw figure, use:
 
 ```python
-edit(fig, apply_existing=False)
+style_figure(fig, mode="edit", apply_existing=False)
+```
+
+If you only want to open the GUI directly without the workflow helpers, use:
+
+```python
+from mpl_visual_editor import edit
+
+edit(fig)
 ```
 
 Use **Export figure...** in the editor to write the currently styled figure as
