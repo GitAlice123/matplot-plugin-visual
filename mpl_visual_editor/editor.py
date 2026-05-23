@@ -135,9 +135,18 @@ class _AspectCanvasHost(QWidget):
     def __init__(self, editor: "StyleEditor") -> None:
         super().__init__()
         self.editor = editor
+        self._resize_pending = False
 
     def resizeEvent(self, event: Any) -> None:
         super().resizeEvent(event)
+        if self.editor._updating_canvas_display:
+            return
+        if not self._resize_pending:
+            self._resize_pending = True
+            QTimer.singleShot(0, self._delayed_resize_update)
+
+    def _delayed_resize_update(self) -> None:
+        self._resize_pending = False
         self.editor._update_canvas_display_size()
         self.editor.canvas.draw_idle()
 
@@ -381,6 +390,7 @@ class StyleEditor(QMainWindow):
         self._active_handle: Optional[str] = None
         self._legend_position_dirty = False
         self._fit_in_progress = False
+        self._updating_canvas_display = False
         self._base_subplotpars: Optional[tuple[float, float, float, float]] = None
         self._preview_zoom: Optional[float] = None
         self._has_unexported_changes = False
@@ -394,7 +404,14 @@ class StyleEditor(QMainWindow):
         self._inline_text_committing = False
 
         self.setWindowTitle("Matplotlib Visual Style Editor")
-        self.resize(1180, 760)
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(1180, available.width())
+            height = min(760, available.height())
+            self.resize(width, height)
+        else:
+            self.resize(1180, 760)
 
         self.canvas = FigureCanvasQTAgg(fig)
         self.canvas.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
@@ -510,12 +527,14 @@ class StyleEditor(QMainWindow):
         side_splitter = QSplitter(Qt.Vertical)
         side_splitter.addWidget(left_panel)
         side_splitter.addWidget(right_panel)
-        side_splitter.setSizes([360, 400])
+        side_splitter.setStretchFactor(0, 9)
+        side_splitter.setStretchFactor(1, 10)
 
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(side_splitter)
         main_splitter.addWidget(plot_panel)
-        main_splitter.setSizes([360, 820])
+        main_splitter.setStretchFactor(0, 3)
+        main_splitter.setStretchFactor(1, 7)
         self.setCentralWidget(main_splitter)
 
         self.object_list.currentItemChanged.connect(self._on_selection_changed)
@@ -1745,28 +1764,42 @@ class StyleEditor(QMainWindow):
             self.fig._mve_height = float(height)
         self._update_canvas_display_size()
 
+    def _canvas_host_margin(self) -> int:
+        layout = self.canvas_host.layout()
+        if layout is not None:
+            margins = layout.contentsMargins()
+            return 2 * max(margins.left(), margins.right(), margins.top(), margins.bottom())
+        return 48
+
     def _update_canvas_display_size(self) -> None:
         if not hasattr(self, "canvas_host"):
             return
-        design_width, design_height = self._figure_size()
-        if design_width <= 0 or design_height <= 0:
+        if self._updating_canvas_display:
             return
-        viewport = self.canvas_scroll.viewport() if hasattr(self, "canvas_scroll") else self.canvas_host
-        host_width = max(1, viewport.width() - 48)
-        host_height = max(1, viewport.height() - 48)
-        natural_width = max(1.0, design_width * PREVIEW_DPI)
-        natural_height = max(1.0, design_height * PREVIEW_DPI)
-        fit_scale = min(host_width / natural_width, host_height / natural_height)
-        scale = fit_scale if self._preview_zoom is None else self._preview_zoom
-        target_width = max(1, int(round(natural_width * scale)))
-        target_height = max(1, int(round(natural_height * scale)))
-        target_dpi = max(1.0, PREVIEW_DPI * scale)
-        if not math.isclose(float(self.fig.dpi), target_dpi, rel_tol=0.001, abs_tol=0.001):
-            self.fig.set_dpi(target_dpi)
-        if self.canvas.width() != target_width or self.canvas.height() != target_height:
-            self.canvas.setFixedSize(target_width, target_height)
-            self.canvas_host.setMinimumSize(target_width + 48, target_height + 48)
-        self._update_preview_zoom_label(scale)
+        self._updating_canvas_display = True
+        try:
+            design_width, design_height = self._figure_size()
+            if design_width <= 0 or design_height <= 0:
+                return
+            viewport = self.canvas_scroll.viewport() if hasattr(self, "canvas_scroll") else self.canvas_host
+            margin = self._canvas_host_margin()
+            host_width = max(1, viewport.width() - margin)
+            host_height = max(1, viewport.height() - margin)
+            natural_width = max(1.0, design_width * PREVIEW_DPI)
+            natural_height = max(1.0, design_height * PREVIEW_DPI)
+            fit_scale = min(host_width / natural_width, host_height / natural_height)
+            scale = fit_scale if self._preview_zoom is None else self._preview_zoom
+            target_width = max(1, int(round(natural_width * scale)))
+            target_height = max(1, int(round(natural_height * scale)))
+            target_dpi = max(1.0, PREVIEW_DPI * scale)
+            if not math.isclose(float(self.fig.dpi), target_dpi, rel_tol=0.001, abs_tol=0.001):
+                self.fig.set_dpi(target_dpi)
+            if self.canvas.width() != target_width or self.canvas.height() != target_height:
+                self.canvas.setFixedSize(target_width, target_height)
+                self.canvas_host.setMinimumSize(target_width + margin, target_height + margin)
+            self._update_preview_zoom_label(scale)
+        finally:
+            self._updating_canvas_display = False
 
     def _zoom_preview(self, factor: float) -> None:
         current_scale = self._current_preview_scale()
@@ -1798,8 +1831,9 @@ class StyleEditor(QMainWindow):
         if design_width <= 0 or design_height <= 0:
             return 1.0
         viewport = self.canvas_scroll.viewport() if hasattr(self, "canvas_scroll") else self.canvas_host
-        host_width = max(1, viewport.width() - 48)
-        host_height = max(1, viewport.height() - 48)
+        margin = self._canvas_host_margin()
+        host_width = max(1, viewport.width() - margin)
+        host_height = max(1, viewport.height() - margin)
         natural_width = max(1.0, design_width * PREVIEW_DPI)
         natural_height = max(1.0, design_height * PREVIEW_DPI)
         return min(host_width / natural_width, host_height / natural_height)
