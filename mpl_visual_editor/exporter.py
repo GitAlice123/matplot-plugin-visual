@@ -311,6 +311,9 @@ def apply_style(fig):
         elif kind == "axis":
             ax = artist.axes
             axis_name = props["axis"]
+            if props.get("labelpad_explicit"):
+                artist.labelpad = float(props["labelpad"])
+                artist._mve_labelpad = float(props["labelpad"])
             if props.get("scale_explicit"):
                 if axis_name == "x":
                     ax.set_xscale(props["scale"])

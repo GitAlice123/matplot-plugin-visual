@@ -383,6 +383,15 @@ class StyleEditor(QMainWindow):
         self._fit_in_progress = False
         self._base_subplotpars: tuple[float, float, float, float] | None = None
         self._preview_zoom: float | None = None
+        self._has_unexported_changes = False
+        self._history_limit = 10
+        self._undo_stack: list[dict[str, Any]] = []
+        self._redo_stack: list[dict[str, Any]] = []
+        self._restoring_history = False
+        self._pending_history_snapshot: dict[str, Any] | None = None
+        self._inline_text_editor: QLineEdit | None = None
+        self._inline_text_ref: ArtistRef | None = None
+        self._inline_text_committing = False
 
         self.setWindowTitle("Matplotlib Visual Style Editor")
         self.resize(1180, 760)
@@ -434,6 +443,18 @@ class StyleEditor(QMainWindow):
                 action.triggered.connect(lambda _checked=False, selected_tool=tool: self._set_insert_tool(selected_tool))
         add_shape_button.setMenu(shape_menu)
         left_layout.addWidget(add_shape_button)
+
+        history_controls = QWidget()
+        history_layout = QHBoxLayout(history_controls)
+        history_layout.setContentsMargins(0, 0, 0, 0)
+        self.undo_button = QPushButton("Undo")
+        self.undo_button.clicked.connect(self._undo)
+        self.redo_button = QPushButton("Redo")
+        self.redo_button.clicked.connect(self._redo)
+        history_layout.addWidget(self.undo_button)
+        history_layout.addWidget(self.redo_button)
+        left_layout.addWidget(history_controls)
+        self._refresh_history_buttons()
 
         export_button = QPushButton("Export style patch")
         export_button.clicked.connect(self._export)
@@ -523,6 +544,8 @@ class StyleEditor(QMainWindow):
                 for patch in artist.patches:
                     if hasattr(patch, "set_picker"):
                         patch.set_picker(True)
+            elif ref.kind == "legend":
+                artist.set_draggable(True, use_blit=False, update="bbox")
             elif ref.kind == "unsupported" and hasattr(artist, "set_picker"):
                 artist.set_picker(True)
 
@@ -562,13 +585,14 @@ class StyleEditor(QMainWindow):
         self._clear_insert_tool()
         ax, data_x, data_y = target
         center = (data_x, data_y)
+        self._push_undo_snapshot()
         if tool.startswith("shape:"):
             shape_type = tool.split(":", 1)[1]
             artist = add_shape(ax, shape_type, center=center)
-            message = f"Added {shape_type}. Drag handles to move, resize, or rotate; click Save placement."
+            message = f"Added {shape_type}. Drag handles to move, resize, or rotate."
         else:
             artist = add_textbox(ax, center=center)
-            message = "Added text box. Drag it or its handles, then click Save placement."
+            message = "Added text box. Drag it or its handles."
         self._refresh_refs()
         self._select_ref_by_artist(artist)
         if self.current_ref is not None and self.current_ref.kind in {"shape", "textbox"}:
@@ -650,6 +674,29 @@ class StyleEditor(QMainWindow):
             )
         )
 
+    def _move_text_by_display_delta(self, artist: Any, dx: float, dy: float) -> None:
+        self._prepare_text_for_free_drag(artist)
+        try:
+            x, y = artist.get_position()
+            display_x, display_y = artist.get_transform().transform((float(x), float(y)))
+            new_x, new_y = artist.get_transform().inverted().transform((display_x + float(dx), display_y + float(dy)))
+        except Exception:
+            return
+        artist.set_position((float(new_x), float(new_y)))
+
+    def _prepare_text_for_free_drag(self, artist: Any) -> None:
+        if hasattr(artist, "set_in_layout"):
+            artist.set_in_layout(False)
+        ax = getattr(artist, "axes", None)
+        if ax is None:
+            return
+        if artist is getattr(ax, "title", None):
+            ax._autotitlepos = False
+        if artist is getattr(ax.xaxis, "label", None):
+            ax.xaxis._autolabelpos = False
+        if artist is getattr(ax.yaxis, "label", None):
+            ax.yaxis._autolabelpos = False
+
     def _select_ref_by_artist(self, artist: Any) -> None:
         for ref in self.refs:
             if ref.artist is artist:
@@ -702,6 +749,12 @@ class StyleEditor(QMainWindow):
         self.status.setText(f"Hover: {ref.label}")
 
     def _on_canvas_click(self, event: Any) -> None:
+        if getattr(event, "dblclick", False):
+            if event.button == 1:
+                self._start_inline_text_edit_at_event(event)
+            return
+        if self._inline_text_editor is not None:
+            self._cancel_inline_text_edit()
         if event.button == 3 and self._insert_tool is not None:
             self._clear_insert_tool()
             self.status.setText("Insert cancelled.")
@@ -716,6 +769,7 @@ class StyleEditor(QMainWindow):
             self._active_handle = handle
             self._drag_last_data = (float(event.xdata), float(event.ydata)) if event.xdata is not None and event.ydata is not None else None
             self._drag_moved = False
+            self._pending_history_snapshot = self._capture_history_snapshot()
             return
 
         ref = self._find_ref_at_event(event)
@@ -736,18 +790,20 @@ class StyleEditor(QMainWindow):
         self._update_canvas_display_size()
         target = self._event_data_point(event, ref.artist.axes if hasattr(ref.artist, "axes") else None)
         if ref.kind == "text":
-            text_point = self._event_artist_point(event, ref.artist)
-            if text_point is not None:
+            if event.x is not None and event.y is not None:
                 self._drag_ref = ref
-                self._drag_last_data = text_point
+                self._drag_last_data = (float(event.x), float(event.y))
                 self._drag_moved = False
-        elif ref.kind in {"shape", "textbox", "line", "arrow"} and target is not None:
+                self._pending_history_snapshot = self._capture_history_snapshot()
+        elif ref.kind in {"shape", "textbox", "arrow"} and target is not None:
             _ax, data_x, data_y = target
             self._drag_ref = ref
             self._drag_last_data = (data_x, data_y)
             self._drag_moved = False
+            self._pending_history_snapshot = self._capture_history_snapshot()
         if ref.kind == "legend":
             self._legend_press_xy = (float(event.x), float(event.y))
+            self._pending_history_snapshot = self._capture_history_snapshot()
         self.status.setText(f"Pinned: {ref.label}")
 
     def _on_canvas_release(self, event: Any) -> None:
@@ -758,8 +814,11 @@ class StyleEditor(QMainWindow):
             self._draw_anchor_data = None
             self._drag_moved = False
             if moved:
+                if self._pending_history_snapshot is not None:
+                    self._push_undo_snapshot(self._pending_history_snapshot)
                 self._mark_position_dirty()
-                self.status.setText("Placement changed. Click Save placement to keep it.")
+                self.status.setText("Placement auto-saved.")
+            self._pending_history_snapshot = None
             return
         if self._drag_ref is not None:
             moved = self._drag_moved
@@ -767,8 +826,11 @@ class StyleEditor(QMainWindow):
             self._drag_last_data = None
             self._drag_moved = False
             if moved:
+                if self._pending_history_snapshot is not None:
+                    self._push_undo_snapshot(self._pending_history_snapshot)
                 self._mark_position_dirty()
-                self.status.setText("Placement moved. Click Save placement to keep it.")
+                self.status.setText("Placement auto-saved.")
+            self._pending_history_snapshot = None
             return
         if (
             self.current_ref is None
@@ -778,6 +840,7 @@ class StyleEditor(QMainWindow):
             or event.y is None
         ):
             self._legend_press_xy = None
+            self._pending_history_snapshot = None
             return
 
         start_x, start_y = self._legend_press_xy
@@ -785,15 +848,119 @@ class StyleEditor(QMainWindow):
         moved = abs(float(event.x) - start_x) + abs(float(event.y) - start_y)
         if moved > 4:
             self._legend_position_dirty = True
-            self._mark_position_dirty()
+            if self._pending_history_snapshot is not None:
+                self._push_undo_snapshot(self._pending_history_snapshot)
+            self._save_current_legend_position()
             self._refresh_hover_highlight()
             self.canvas.draw_idle()
-            self.status.setText("Legend moved. Click Save to keep it.")
+            self.status.setText("Legend position auto-saved.")
+        self._pending_history_snapshot = None
 
     def _on_canvas_leave(self, _event: Any) -> None:
         if self.pinned_ref is not None:
             return
         self._clear_hover_highlight()
+
+    def _start_inline_text_edit_at_event(self, event: Any) -> None:
+        ref = self._text_ref_at_event(event)
+        if ref is None:
+            return
+        self._discard_unsaved_preview()
+        self._select_ref(ref)
+        self.pinned_ref = ref
+        self._set_hover_highlight(ref)
+        self._show_selection_handles(ref)
+        self._start_inline_text_edit(ref)
+
+    def _text_ref_at_event(self, event: Any) -> ArtistRef | None:
+        for ref in reversed(self.refs):
+            if ref.kind not in {"text", "textbox"}:
+                continue
+            adapter = get_adapter(ref.kind)
+            if adapter is not None and adapter.hit_test(ref, event, self):
+                return ref
+        return None
+
+    def _start_inline_text_edit(self, ref: ArtistRef) -> None:
+        self._cancel_inline_text_edit()
+        if not hasattr(ref.artist, "get_text"):
+            return
+        try:
+            self.canvas.draw()
+            renderer = self.canvas.get_renderer()
+            bbox = ref.artist.get_window_extent(renderer=renderer)
+        except Exception:
+            return
+
+        editor = QLineEdit(str(ref.artist.get_text()), self.canvas)
+        editor.selectAll()
+        width = max(80, int(math.ceil(bbox.width)) + 24)
+        height = max(24, int(editor.sizeHint().height()))
+        left = max(0, min(int(math.floor(bbox.x0)), max(0, self.canvas.width() - width)))
+        top = max(0, min(int(math.floor(self.canvas.height() - bbox.y1)), max(0, self.canvas.height() - height)))
+        editor.setGeometry(left, top, width, height)
+
+        def key_press(key_event: Any) -> None:
+            if key_event.key() == Qt.Key_Escape:
+                self._cancel_inline_text_edit()
+                return
+            if key_event.key() in {Qt.Key_Return, Qt.Key_Enter}:
+                self._commit_inline_text_edit()
+                return
+            QLineEdit.keyPressEvent(editor, key_event)
+
+        def focus_out(focus_event: Any) -> None:
+            QLineEdit.focusOutEvent(editor, focus_event)
+            if not self._inline_text_committing:
+                self._cancel_inline_text_edit()
+
+        editor.keyPressEvent = key_press  # type: ignore[method-assign]
+        editor.focusOutEvent = focus_out  # type: ignore[method-assign]
+        self._inline_text_editor = editor
+        self._inline_text_ref = ref
+        editor.show()
+        editor.setFocus(Qt.MouseFocusReason)
+        self.status.setText("Editing text inline. Press Enter to apply or Esc to cancel.")
+
+    def _commit_inline_text_edit(self) -> None:
+        editor = self._inline_text_editor
+        ref = self._inline_text_ref
+        if editor is None or ref is None:
+            return
+        value = editor.text()
+        old_value = ref.artist.get_text() if hasattr(ref.artist, "get_text") else value
+        self._inline_text_committing = True
+        try:
+            self._clear_inline_text_editor()
+            if value == old_value:
+                return
+            self._push_undo_snapshot()
+            self._set_ref_text(ref, value)
+            self._mark_unexported_changes()
+            self._refresh_refs_preserving_path(ref.path)
+            self.canvas.draw_idle()
+            self.status.setText("Text updated.")
+        finally:
+            self._inline_text_committing = False
+
+    def _cancel_inline_text_edit(self) -> None:
+        self._clear_inline_text_editor()
+
+    def _clear_inline_text_editor(self) -> None:
+        editor = self._inline_text_editor
+        self._inline_text_editor = None
+        self._inline_text_ref = None
+        if editor is not None:
+            editor.hide()
+            editor.deleteLater()
+
+    def _set_ref_text(self, ref: ArtistRef, value: str) -> None:
+        if ref.kind == "textbox":
+            props = textbox_props(ref.artist)
+            props["text"] = value
+            apply_textbox_props(ref.artist.axes, props, ref.artist)
+            return
+        ref.artist.set_text(value)
 
     def _drag_editor_artist(self, event: Any) -> None:
         if (
@@ -802,10 +969,15 @@ class StyleEditor(QMainWindow):
         ):
             return
         if self._drag_ref.kind == "text":
-            text_point = self._event_artist_point(event, self._drag_ref.artist)
-            if text_point is None:
+            if event.x is None or event.y is None:
                 return
-            x, y = text_point
+            last_x, last_y = self._drag_last_data
+            self._move_text_by_display_delta(self._drag_ref.artist, float(event.x) - last_x, float(event.y) - last_y)
+            self._drag_last_data = (float(event.x), float(event.y))
+            self._drag_moved = True
+            self._show_selection_handles(self._drag_ref)
+            self.canvas.draw_idle()
+            return
         else:
             target = self._event_data_point(event, self._drag_ref.artist.axes if hasattr(self._drag_ref.artist, "axes") else None)
             if target is None:
@@ -827,8 +999,6 @@ class StyleEditor(QMainWindow):
         elif ref.kind == "text":
             x, y = ref.artist.get_position()
             ref.artist.set_position((float(x) + dx, float(y) + dy))
-        elif ref.kind == "line":
-            self._move_line(ref.artist, dx, dy)
         elif ref.kind == "arrow":
             props = arrow_props(ref.artist)
             props["posA"] = [props["posA"][0] + dx, props["posA"][1] + dy]
@@ -904,8 +1074,6 @@ class StyleEditor(QMainWindow):
             self._drag_textbox_handle(ref, self._active_handle, x, y)
         elif ref.kind == "text":
             self._drag_text_handle(ref, self._active_handle, x, y)
-        elif ref.kind == "line":
-            self._drag_line_handle(ref, self._active_handle, x, y)
         elif ref.kind == "arrow":
             self._drag_arrow_handle(ref, self._active_handle, x, y)
         else:
@@ -1040,7 +1208,7 @@ class StyleEditor(QMainWindow):
 
     def _show_selection_handles(self, ref: ArtistRef | None) -> None:
         self._clear_selection_handles()
-        if ref is None or ref.kind not in {"shape", "textbox", "text", "line", "arrow"}:
+        if ref is None or ref.kind not in {"shape", "textbox", "arrow"}:
             return
         ax = ref.artist.axes
         if ax is None:
@@ -1049,10 +1217,6 @@ class StyleEditor(QMainWindow):
             points = self._shape_handle_points(shape_props(ref.artist))
         elif ref.kind == "textbox":
             points = self._textbox_handle_points(ref.artist)
-        elif ref.kind == "text":
-            points = self._text_handle_points(ref.artist)
-        elif ref.kind == "line":
-            points = self._line_handle_points(ref.artist)
         else:
             points = self._arrow_handle_points(ref.artist)
         xlim = ax.get_xlim()
@@ -1176,6 +1340,21 @@ class StyleEditor(QMainWindow):
         return cx + x * cos_a - y * sin_a, cy + x * sin_a + y * cos_a
 
     def closeEvent(self, event: Any) -> None:
+        if self._has_unexported_changes:
+            choice = QMessageBox.warning(
+                self,
+                "Unexported style changes",
+                "You have style changes that have not been exported since the last edit.\n\n"
+                "If you close now, changes that were not exported with Export style patch "
+                "will be cleared the next time you open this figure.\n\n"
+                "Close without exporting?",
+                QMessageBox.Close | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if choice != QMessageBox.Close:
+                event.ignore()
+                return
+        self._clear_inline_text_editor()
         self._clear_selection_handles()
         self._clear_hover_highlight(redraw=False)
         super().closeEvent(event)
@@ -1215,6 +1394,40 @@ class StyleEditor(QMainWindow):
                 if self.object_list.currentRow() != row:
                     self.object_list.setCurrentRow(row)
                 return
+
+    def _refresh_refs_preserving_path(self, path: tuple[Any, ...] | list[Any] | None) -> None:
+        self._clear_hover_highlight(redraw=False)
+        self._clear_selection_handles()
+        self.refs = iter_artist_refs(self.fig)
+        self._configure_picking()
+        self._populate_object_list()
+        self.current_ref = None
+        self.pinned_ref = None
+        selected_ref = self._ref_for_path(path) if path is not None else None
+        if selected_ref is None and self.refs:
+            selected_ref = self.refs[0]
+        if selected_ref is None:
+            self.canvas.draw_idle()
+            return
+        self._selecting_programmatically = True
+        try:
+            self._select_ref(selected_ref)
+        finally:
+            self._selecting_programmatically = False
+        self.current_ref = selected_ref
+        self.pinned_ref = selected_ref
+        self._build_form(selected_ref)
+        self._set_hover_highlight(selected_ref)
+        self._show_selection_handles(selected_ref)
+
+    def _ref_for_path(self, path: tuple[Any, ...] | list[Any] | None) -> ArtistRef | None:
+        if path is None:
+            return None
+        target = tuple(path)
+        for ref in self.refs:
+            if tuple(ref.path) == target:
+                return ref
+        return None
 
     def _set_hover_highlight(self, ref: ArtistRef) -> None:
         self._clear_hover_highlight(redraw=False)
@@ -1333,38 +1546,31 @@ class StyleEditor(QMainWindow):
 
     def _add_button(self, label: str, callback: Callable[[], Any]) -> None:
         button = QPushButton(label)
-        save_button = QPushButton("Save")
-        save_button.setEnabled(False)
-        save_button._mve_editor_widget = button
+        save_button = self._hidden_save_button(button)
         button.clicked.connect(lambda: self._apply(callback, save_button))
-        save_button.clicked.connect(self._save_current_changes_from_sender)
-        self._save_buttons.append(save_button)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(button, 1)
-        layout.addWidget(save_button)
         self.form.addRow("", row)
 
     def _add_position_save_button(self, button_text: str = "Save position") -> None:
-        button = QPushButton(button_text)
-        button.setEnabled(False)
-        button.clicked.connect(self._save_current_position)
-        self._position_save_button = button
-        self.form.addRow("Position", button)
+        self._position_save_button = None
 
     def _add_property_row(self, label: str, widget: QWidget) -> QPushButton:
-        save_button = QPushButton("Save")
-        save_button.setEnabled(False)
-        save_button._mve_editor_widget = widget
-        save_button.clicked.connect(self._save_current_changes_from_sender)
-        self._save_buttons.append(save_button)
+        save_button = self._hidden_save_button(widget)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(widget, 1)
-        layout.addWidget(save_button)
         self.form.addRow(label, row)
+        return save_button
+
+    def _hidden_save_button(self, widget: QWidget) -> QPushButton:
+        save_button = QPushButton()
+        save_button.setVisible(False)
+        save_button.setEnabled(False)
+        save_button._mve_editor_widget = widget
         return save_button
 
     def _pick_color(self, button: QPushButton, setter: Callable[[str], Any], save_button: QPushButton) -> None:
@@ -1378,6 +1584,124 @@ class StyleEditor(QMainWindow):
     def _set_controls_enabled(self, widgets: list[QWidget], enabled: bool) -> None:
         for widget in widgets:
             widget.setEnabled(bool(enabled))
+
+    def _capture_history_snapshot(self) -> dict[str, Any]:
+        refs = [
+            snapshot_artist(ref.kind, ref.path, ref.artist)
+            for ref in iter_artist_refs(self.fig)
+            if self._history_ref_supported(ref)
+        ]
+        return {"refs": refs}
+
+    def _history_ref_supported(self, ref: ArtistRef) -> bool:
+        if getattr(ref.artist, "_mve_kind", None) == "editor_handle":
+            return False
+        if hasattr(ref.artist, "get_zorder"):
+            try:
+                if float(ref.artist.get_zorder()) >= 1_000_000:
+                    return False
+            except (TypeError, ValueError):
+                pass
+        return ref.kind not in {"unsupported", "text_group"}
+
+    def _push_undo_snapshot(self, snapshot: dict[str, Any] | None = None) -> None:
+        if self._building_form or self._suppress_dirty or self._restoring_history:
+            return
+        snapshot = snapshot or self._capture_history_snapshot()
+        self._undo_stack.append(snapshot)
+        if len(self._undo_stack) > self._history_limit:
+            self._undo_stack = self._undo_stack[-self._history_limit :]
+        self._redo_stack.clear()
+        self._refresh_history_buttons()
+
+    def _refresh_history_buttons(self) -> None:
+        if hasattr(self, "undo_button"):
+            self.undo_button.setEnabled(bool(self._undo_stack))
+        if hasattr(self, "redo_button"):
+            self.redo_button.setEnabled(bool(self._redo_stack))
+
+    def _undo(self) -> None:
+        if not self._undo_stack:
+            return
+        current = self._capture_history_snapshot()
+        snapshot = self._undo_stack.pop()
+        self._redo_stack.append(current)
+        if len(self._redo_stack) > self._history_limit:
+            self._redo_stack = self._redo_stack[-self._history_limit :]
+        self._restore_history_snapshot(snapshot)
+        self._mark_unexported_changes()
+        self._refresh_history_buttons()
+        self.status.setText("Undid last change.")
+
+    def _redo(self) -> None:
+        if not self._redo_stack:
+            return
+        current = self._capture_history_snapshot()
+        snapshot = self._redo_stack.pop()
+        self._undo_stack.append(current)
+        if len(self._undo_stack) > self._history_limit:
+            self._undo_stack = self._undo_stack[-self._history_limit :]
+        self._restore_history_snapshot(snapshot)
+        self._mark_unexported_changes()
+        self._refresh_history_buttons()
+        self.status.setText("Redid change.")
+
+    def _restore_history_snapshot(self, snapshot: dict[str, Any]) -> None:
+        preferred_path = self.current_ref.path if self.current_ref is not None else None
+        target_snapshots = [item for item in snapshot.get("refs", []) if isinstance(item, dict)]
+        target_paths = {tuple(item.get("path", ())) for item in target_snapshots}
+        self._restoring_history = True
+        old_suppress_dirty = self._suppress_dirty
+        self._suppress_dirty = True
+        self._clear_inline_text_editor()
+        self._clear_hover_highlight(redraw=False)
+        self._clear_selection_handles()
+        try:
+            self._remove_history_extras(target_paths)
+            self.refs = iter_artist_refs(self.fig)
+            ref_map = {tuple(ref.path): ref for ref in self.refs}
+            for item in target_snapshots:
+                path = tuple(item.get("path", ()))
+                ref = ref_map.get(path)
+                if ref is not None:
+                    self._restore_snapshot(ref, item)
+                    continue
+                self._restore_missing_history_artist(item)
+                self.refs = iter_artist_refs(self.fig)
+                ref_map = {tuple(new_ref.path): new_ref for new_ref in self.refs}
+        finally:
+            self._suppress_dirty = old_suppress_dirty
+            self._restoring_history = False
+        self._refresh_refs_preserving_path(preferred_path)
+        self.canvas.draw_idle()
+
+    def _remove_history_extras(self, target_paths: set[tuple[Any, ...]]) -> None:
+        for ref in iter_artist_refs(self.fig):
+            if tuple(ref.path) in target_paths:
+                continue
+            if ref.kind not in {"shape", "textbox", "fill"}:
+                continue
+            try:
+                ref.artist.remove()
+            except Exception:
+                pass
+
+    def _restore_missing_history_artist(self, snapshot: dict[str, Any]) -> None:
+        path = tuple(snapshot.get("path", ()))
+        props = snapshot.get("props", {})
+        if len(path) < 2 or path[0] != "axes" or not isinstance(props, dict):
+            return
+        try:
+            ax = self.fig.axes[int(path[1])]
+        except (IndexError, TypeError, ValueError):
+            return
+        kind = snapshot.get("kind")
+        if kind == "shape":
+            apply_shape_props(ax, props)
+        elif kind == "textbox":
+            apply_textbox_props(ax, props)
+        elif kind == "fill":
+            apply_fill_props(ax, props)
 
     def _rebuild_current_legend(self, **changes: Any) -> None:
         if self._rebuilding_legend:
@@ -1488,6 +1812,10 @@ class StyleEditor(QMainWindow):
             ax.set_yscale(scale)
         axis._mve_scale = scale
         self._apply_axis_ticks(axis, axis_name, self._axis_tick_start(axis), self._axis_tick_interval(axis), self._axis_tick_end(axis))
+
+    def _set_axis_labelpad(self, axis: Any, value: float) -> None:
+        axis.labelpad = float(value)
+        axis._mve_labelpad = float(value)
 
     def _is_categorical_axis(self, axis: Any, axis_name: str) -> bool:
         ax = axis.axes
@@ -1840,11 +2168,12 @@ class StyleEditor(QMainWindow):
         view_state = self._capture_preview_view()
         self._active_save_button = save_button
         try:
+            self._push_undo_snapshot()
             callback()
             self._sync_current_line_legend_handle()
             self._sync_current_bar_legend_handle()
             self._sync_current_scatter_legend_handle()
-            self._mark_dirty(save_button)
+            self._auto_save_current_state()
         finally:
             self._active_save_button = None
         self._redraw("Updated", view_state=view_state)
@@ -2006,19 +2335,41 @@ class StyleEditor(QMainWindow):
     def _mark_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
-        self._dirty = True
-        if save_button is not None and hasattr(save_button, "_mve_editor_widget"):
-            widget = getattr(save_button, "_mve_editor_widget", None)
-            if isinstance(widget, QWidget):
-                self._dirty_widgets.add(widget)
-        if save_button is not None:
-            save_button.setEnabled(True)
-            save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
-        self.status.setText("Preview updated. Click Save to keep it.")
+        self._auto_save_current_state()
+        return
 
     def _mark_pending_dirty(self, save_button: QPushButton | None = None) -> None:
         if self._building_form or self._suppress_dirty:
             return
+        self.status.setText("Text changed. Press Enter to apply and auto-save it.")
+
+    def _mark_position_dirty(self) -> None:
+        if self._building_form or self._suppress_dirty:
+            return
+        self._auto_save_current_state(message="Placement auto-saved.")
+
+    def _mark_unexported_changes(self) -> None:
+        if self._building_form or self._suppress_dirty:
+            return
+        self._has_unexported_changes = True
+
+    def _auto_save_current_state(self, message: str | None = None) -> None:
+        if self._building_form or self._suppress_dirty or self.current_ref is None:
+            return
+        self._mark_unexported_changes()
+        self._committed_snapshot = snapshot_artist(
+            self.current_ref.kind,
+            self.current_ref.path,
+            self.current_ref.artist,
+        )
+        self._dirty = False
+        self._dirty_widgets = set()
+        self._legend_position_dirty = False
+        self.status.setText(message or f"Auto-saved: {self.current_ref.label}")
+
+    def _legacy_mark_dirty(self, save_button: QPushButton | None = None) -> None:
+        if self._building_form or self._suppress_dirty:
+            return
         self._dirty = True
         if save_button is not None and hasattr(save_button, "_mve_editor_widget"):
             widget = getattr(save_button, "_mve_editor_widget", None)
@@ -2027,16 +2378,7 @@ class StyleEditor(QMainWindow):
         if save_button is not None:
             save_button.setEnabled(True)
             save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
-        self.status.setText("Text changed. Press Enter or click Save to apply it.")
-
-    def _mark_position_dirty(self) -> None:
-        if self._building_form or self._suppress_dirty:
-            return
-        self._dirty = True
-        self._legend_position_dirty = True
-        if self._position_save_button is not None:
-            self._position_save_button.setEnabled(True)
-            self._position_save_button.setStyleSheet("font-weight: 700; background: #ffcc00;")
+        self.status.setText("Preview auto-saved.")
 
     def _save_current_changes(self, editor_widget: QWidget | None = None) -> None:
         if self.current_ref is None:
@@ -2128,6 +2470,7 @@ class StyleEditor(QMainWindow):
         )
         self._dirty = False
         self._legend_position_dirty = False
+        self._mark_unexported_changes()
         for button in self._save_buttons:
             button.setEnabled(False)
             button.setStyleSheet("")
@@ -2236,16 +2579,21 @@ class StyleEditor(QMainWindow):
             self._set_text_group_fontstyle(artist, props["fontstyle"])
         elif kind == "axis":
             axis_name = props["axis"]
-            self._set_axis_scale(artist, axis_name, props["scale"])
-            self._apply_axis_ticks(artist, axis_name, props["tick_start"], props["tick_interval"], props.get("tick_end"))
-            self._apply_axis_tick_labels(
-                artist,
-                fontsize=props["tick_label_fontsize"],
-                color=props["tick_label_color"],
-                weight=props["tick_label_weight"],
-                style=props["tick_label_style"],
-                rotation=props["tick_label_rotation"],
-            )
+            if props.get("labelpad_explicit", True):
+                self._set_axis_labelpad(artist, props["labelpad"])
+            if props.get("scale_explicit", True):
+                self._set_axis_scale(artist, axis_name, props["scale"])
+            if props.get("ticks_explicit", True):
+                self._apply_axis_ticks(artist, axis_name, props["tick_start"], props["tick_interval"], props.get("tick_end"))
+            if props.get("tick_labels_explicit", True):
+                self._apply_axis_tick_labels(
+                    artist,
+                    fontsize=props["tick_label_fontsize"],
+                    color=props["tick_label_color"],
+                    weight=props["tick_label_weight"],
+                    style=props["tick_label_style"],
+                    rotation=props["tick_label_rotation"],
+                )
         elif kind == "legend":
             self._restore_legend_snapshot(artist, props)
         elif kind == "spine":
@@ -2393,6 +2741,7 @@ class StyleEditor(QMainWindow):
         self._clear_selection_handles()
         self._clear_hover_highlight()
         path = export_style(self.fig, self.export_path, source=_source_metadata(self.source_path))
+        self._has_unexported_changes = False
         if pinned_ref is not None:
             self._set_hover_highlight(pinned_ref)
             self._show_selection_handles(pinned_ref)
@@ -2478,6 +2827,7 @@ class StyleEditor(QMainWindow):
             )
             return
 
+        self._push_undo_snapshot()
         self._clear_hover_highlight()
         self._clear_selection_handles()
         self.pinned_ref = None
@@ -2488,6 +2838,7 @@ class StyleEditor(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Delete failed", str(exc))
             return
+        self._mark_unexported_changes()
 
         self.refs = iter_artist_refs(self.fig)
         self._configure_picking()

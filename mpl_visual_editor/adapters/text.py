@@ -95,6 +95,11 @@ class TextAdapter(BaseAdapter):
 
         artist = ref.artist
         editor._add_text("Text", artist.get_text(), artist.set_text)
+        ax = self._axes_for_fixed_text(ref, editor)
+        if ax is not None and len(ref.path) >= 3 and ref.path[2] == "xlabel":
+            editor._add_float("Label pad", float(ax.xaxis.labelpad), lambda v: editor._set_axis_labelpad(ax.xaxis, v), -200.0, 300.0, 1.0)
+        elif ax is not None and len(ref.path) >= 3 and ref.path[2] == "ylabel":
+            editor._add_float("Label pad", float(ax.yaxis.labelpad), lambda v: editor._set_axis_labelpad(ax.yaxis, v), -200.0, 300.0, 1.0)
         x, y = artist.get_position()
         editor._add_float("X", float(x), lambda v: editor._set_text_position(artist, x=v), -1e12, 1e12, 0.1, decimals=4)
         editor._add_float("Y", float(y), lambda v: editor._set_text_position(artist, y=v), -1e12, 1e12, 0.1, decimals=4)
@@ -105,3 +110,11 @@ class TextAdapter(BaseAdapter):
         editor._add_choice("Style", artist.get_fontstyle(), ["normal", "italic", "oblique"], artist.set_fontstyle)
         editor._add_position_save_button("Save position")
         return True
+
+    def _axes_for_fixed_text(self, ref: ArtistRef, editor: Any) -> Any | None:
+        if len(ref.path) < 3 or ref.path[0] != "axes":
+            return None
+        try:
+            return editor.fig.axes[int(ref.path[1])]
+        except (IndexError, TypeError, ValueError):
+            return None

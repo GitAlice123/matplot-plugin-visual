@@ -160,7 +160,11 @@ def snapshot_artist(
                 "_mve_tick_label_rotation",
             ]
         )
+        labelpad_explicit = hasattr(artist, "_mve_labelpad")
         props = {"axis": axis_name}
+        if labelpad_explicit or not for_export:
+            props["labelpad"] = float(artist.labelpad)
+            props["labelpad_explicit"] = bool(labelpad_explicit)
         if scale_explicit or not for_export:
             props["scale"] = scale
             props["scale_explicit"] = bool(scale_explicit)

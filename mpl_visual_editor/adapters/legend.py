@@ -77,9 +77,15 @@ class LegendAdapter(BaseAdapter):
         frame = artist.get_frame()
         texts = artist.get_texts()
         fontsize = texts[0].get_fontsize() if texts else 10
+
+        def set_frame_visible(visible: bool) -> None:
+            artist.set_frame_on(bool(visible))
+            frame.set_visible(bool(visible))
+
+        frame_on = artist.get_frame_on() if hasattr(artist, "get_frame_on") else frame.get_visible()
         editor._add_bool("Visible", artist.get_visible(), artist.set_visible)
         editor._add_float("Font size", fontsize, lambda v: editor._rebuild_current_legend(fontsize=v), 1.0, 96.0, 1.0)
-        editor._add_bool("Frame", frame.get_visible(), frame.set_visible)
+        editor._add_bool("Frame", frame_on, set_frame_visible)
         editor._add_float("Frame alpha", frame.get_alpha() if frame.get_alpha() is not None else 1.0, frame.set_alpha, 0.0, 1.0, 0.05)
         editor._add_color("Face color", frame.get_facecolor(), frame.set_facecolor)
         edge_width_widget = None

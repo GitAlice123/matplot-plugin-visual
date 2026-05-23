@@ -124,8 +124,8 @@ class AxisAdapter(BaseAdapter):
 
     def _axis_highlight_artists(self, ref: ArtistRef) -> list[Any]:
         axis = ref.artist
-        artists: list[Any] = [axis.label]
+        artists: list[Any] = []
         for tick in axis.get_major_ticks():
-            artists.extend([tick.tick1line, tick.tick2line, tick.label1, tick.label2])
+            artists.extend([tick.tick1line, tick.tick2line])
         return artists
 

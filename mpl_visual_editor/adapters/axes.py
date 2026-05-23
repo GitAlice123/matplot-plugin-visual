@@ -36,7 +36,7 @@ class AxesAdapter(BaseAdapter):
             linewidth=2.5,
             linestyle="--",
             zorder=1_000_000,
-            clip_on=False,
+            clip_on=True,
         )
         ref.artist.add_patch(overlay)
         return {"kind": ref.kind, "overlay": overlay}
