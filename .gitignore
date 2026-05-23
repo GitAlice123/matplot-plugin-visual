@@ -1,8 +1,8 @@
-draw_normal_CCalgo_chinese_jn.py
 __pycache__/
 *.py[cod]
 *.egg-info/
 build/
 dist/
+examples/styles/
 examples/*.pdf
 examples/*_style_patch.py
