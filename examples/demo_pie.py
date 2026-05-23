@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+EXAMPLES_DIR = Path(__file__).resolve().parent
 
 import matplotlib.pyplot as plt
 
@@ -38,7 +35,7 @@ def main() -> None:
         mode=STYLE_MODE,
         name="demo_pie",
         source_path=__file__,
-        style_dir=ROOT / "examples" / "styles",
+        style_dir=EXAMPLES_DIR / "styles",
     )
 
 

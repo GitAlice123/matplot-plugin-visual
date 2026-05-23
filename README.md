@@ -69,14 +69,26 @@ exports a replayable patch.
 
 ## Install
 
+For local development, install the project in editable mode from the repository
+root:
+
 ```bash
-pip install -r requirements.txt
+pip install -e .
+```
+
+After that, scripts can import `mpl_visual_editor` like a normal Python package
+without modifying `sys.path`.
+
+For a regular local install, use:
+
+```bash
+pip install .
 ```
 
 ## Demo
 
 ```bash
-python examples/demo_basic.py
+python examples/demo_line.py
 ```
 
 ```bash
@@ -105,8 +117,10 @@ mpl_visual_editor/
         spine.py
         unsupported.py
 examples/
-    demo_basic.py
+    demo_line.py
+    demo_bar.py
 README.md
+pyproject.toml
 requirements.txt
 ```
 
