@@ -18,7 +18,132 @@ Matplotlib is powerful and precise, but small presentation-level changes often t
 4. Rerun the script.
 5. Repeat until the figure looks acceptable.
 
-This project keeps the strengths of code-based plotting while adding an interactive final adjustment layer. You still create the figure in Python. The editor only inspects and mutates the live Matplotlib `Figure`, then exports a replayable patch that can be applied later.
+Let's look at an example demo, to show a typical matplotlib work with last-mile modifications. 
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+x = np.arange(0, 60)
+baseline = 60 + 0.08 * x + np.sin(x / 5) * 1.2
+optimized = 62 + 0.16 * x + np.sin(x / 6) * 1.0
+
+baseline[24:34] -= 5
+optimized[24:34] -= 3
+
+fig, ax = plt.subplots(figsize=(7, 4))
+
+# The actual data plot is simple.
+ax.plot(x, baseline, marker="o", markevery=6, label="Baseline")
+ax.plot(x, optimized, marker="s", markevery=6, label="Optimized")
+
+ax.set_xlabel("Iteration")
+ax.set_ylabel("Throughput")
+ax.set_title("A simple plot with last-mile annotations")
+ax.grid(True, alpha=0.3)
+ax.legend(loc="upper left")
+
+# The last-mile polish starts here.
+# These edits are useful, but they quickly become tedious because
+# every position, offset, and style is controlled by code.
+
+ax.axvspan(24, 34, alpha=0.15)
+ax.axvline(24, linestyle="--", linewidth=1)
+ax.axvline(34, linestyle="--", linewidth=1)
+
+ax.text(
+    29,
+    72,
+    "degradation window",
+    ha="center",
+    fontsize=9,
+    fontweight="bold",
+)
+
+ax.annotate(
+    "temporary drop",
+    xy=(29, optimized[29]),
+    xytext=(13, 69),
+    arrowprops=dict(arrowstyle="->", linewidth=1.2),
+    bbox=dict(boxstyle="round,pad=0.25", facecolor="white", alpha=0.9),
+    fontsize=9,
+)
+
+ax.annotate(
+    "recovery",
+    xy=(38, optimized[38]),
+    xytext=(44, 67),
+    arrowprops=dict(arrowstyle="->", linewidth=1.2),
+    bbox=dict(boxstyle="round,pad=0.25", facecolor="white", alpha=0.9),
+    fontsize=9,
+)
+
+for i, label, dx, dy in [
+    (24, "start", -6, 2),
+    (34, "end", 1, -3),
+    (50, "stable gain", -8, 2),
+]:
+    ax.scatter(x[i], optimized[i], s=80, facecolors="none", edgecolors="black")
+    ax.text(x[i] + dx, optimized[i] + dy, label, fontsize=8)
+
+ax.set_xlim(-2, 62)
+ax.set_ylim(56, 76)
+fig.subplots_adjust(left=0.12, right=0.96, top=0.88, bottom=0.15)
+
+plt.show()
+```
+What you gonna get is a figure like this:
+<img width="2245" height="638" alt="image" src="https://github.com/user-attachments/assets/9d97bd20-c4b5-4de0-9cdc-2f164f0a867a" />
+
+The base plot is only a few lines of Matplotlib code. However, once we add final annotations, highlighted regions, straight arrows, emphasized points, and layout tweaks, the code quickly becomes full of manual coordinates and fragile offsets.
+
+This project keeps the strengths of code-based plotting while adding an interactive final adjustment layer. You still create the figure in Python. The editor only inspects and mutates the live Matplotlib `Figure`, then exports a replayable patch that can be applied later. With this project, you can write your code like this:
+```python
+from pathlib import Path
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from mpl_visual_editor import style_figure
+
+
+STYLE_MODE = "edit"
+# Use "edit" while polishing the figure interactively.
+# After exporting a style patch, switch to "apply" for reproducible generation.
+# Use "off" to see the raw Matplotlib figure.
+
+
+x = np.arange(0, 60)
+baseline = 60 + 0.08 * x + np.sin(x / 5) * 1.2
+optimized = 62 + 0.16 * x + np.sin(x / 6) * 1.0
+
+baseline[24:34] -= 5
+optimized[24:34] -= 3
+
+fig, ax = plt.subplots(figsize=(7, 4))
+
+# The actual data plot stays simple.
+ax.plot(x, baseline, marker="o", markevery=6, label="Baseline")
+ax.plot(x, optimized, marker="s", markevery=6, label="Optimized")
+
+ax.set_xlabel("Iteration")
+ax.set_ylabel("Throughput")
+ax.set_title("A simple plot with last-mile visual editing")
+ax.grid(True, alpha=0.3)
+ax.legend(loc="upper left")
+
+
+# Instead of writing dozens of fragile last-mile Matplotlib calls,
+# open the visual editor, adjust the figure interactively, and export a
+# reusable Python style patch.
+style_figure(
+    fig,
+    mode=STYLE_MODE,
+    name="last_mile_demo",
+    source_path=__file__,
+    style_dir=Path(__file__).parent / "styles",
+    save_path=Path(__file__).parent / "figures" / "last_mile_demo.pdf",
+)
+```
 
 ## Core idea
 
