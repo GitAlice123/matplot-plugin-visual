@@ -94,7 +94,7 @@ plt.show()
 What you gonna get is a figure like this:
 <img width="2245" height="638" alt="image" src="https://github.com/user-attachments/assets/9d97bd20-c4b5-4de0-9cdc-2f164f0a867a" />
 
-The base plot is only a few lines of Matplotlib code. However, once we add final annotations, highlighted regions, straight arrows, emphasized points, and layout tweaks, the code quickly becomes full of manual coordinates and fragile offsets.
+The base plot is only a few lines of Matplotlib code. However, once we add final annotations, highlighted regions, straight arrows, emphasized points, and layout tweaks, the code quickly becomes full of manual coordinates and fragile offsets. Even with an LLM or coding agent, last-mile figure polishing is hard to delegate: **it is difficult to describe the exact visual layout in your head**, and small details often require repeated prompt-code-render iterations. A WYSIWYG editor makes these adjustments direct and immediate.
 
 This project keeps the strengths of code-based plotting while adding an interactive final adjustment layer. You still create the figure in Python. The editor only inspects and mutates the live Matplotlib `Figure`, then exports a replayable patch that can be applied later. With this project, you can write your code like this:
 ```python
