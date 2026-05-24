@@ -92,7 +92,8 @@ fig.subplots_adjust(left=0.12, right=0.96, top=0.88, bottom=0.15)
 plt.show()
 ```
 What you gonna get is a figure like this:
-<img width="2245" height="638" alt="image" src="https://github.com/user-attachments/assets/9d97bd20-c4b5-4de0-9cdc-2f164f0a867a" />
+<img width="2241" height="646" alt="image" src="https://github.com/user-attachments/assets/432a1953-e0cf-4745-98c0-a807ff545b03" />
+
 
 The base plot is only a few lines of Matplotlib code. However, once we add final annotations, highlighted regions, straight arrows, emphasized points, and layout tweaks, the code quickly becomes full of manual coordinates and fragile offsets. Even with an LLM or coding agent, last-mile figure polishing is hard to delegate: **it is difficult to describe the exact visual layout in your head**, and small details often require repeated prompt-code-render iterations. A WYSIWYG editor makes these adjustments direct and immediate.
 
